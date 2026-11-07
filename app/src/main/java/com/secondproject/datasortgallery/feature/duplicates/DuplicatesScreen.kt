@@ -1,12 +1,12 @@
 package com.secondproject.datasortgallery.feature.duplicates
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -140,7 +140,7 @@ fun DuplicatesScreen(
                             onClick = {
                                 // Delete all duplicates except the first one in each group
                                 duplicateGroups.forEach { group ->
-                                    val duplicatesToDelete = group.items.drop(1).map { it.id }
+                                    val duplicatesToDelete = group.items.drop(1).map { it.uniqueId }
                                     viewModel.deleteMultipleMedia(duplicatesToDelete)
                                 }
                             },
@@ -197,7 +197,7 @@ fun DuplicatesScreen(
                                                 )
                                             }
                                             if (index > 0) {
-                                                IconButton(onClick = { viewModel.deleteMedia(media.id) }) {
+                                                IconButton(onClick = { viewModel.deleteMedia(media.uniqueId) }) {
                                                     Icon(Icons.Default.Delete, contentDescription = "Delete", tint = MaterialTheme.colorScheme.error)
                                                 }
                                             }

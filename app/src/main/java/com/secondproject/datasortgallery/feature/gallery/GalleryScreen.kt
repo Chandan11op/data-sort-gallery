@@ -79,7 +79,7 @@ fun GalleryScreen(
                     .fillMaxSize()
                     .padding(innerPadding)
             ) {
-                items(mediaList, key = { it.id }) { media ->
+                items(mediaList, key = { it.uniqueId }) { media ->
                     MediaThumbnailItem(
                         media = media,
                         onClick = { selectedMedia = media }

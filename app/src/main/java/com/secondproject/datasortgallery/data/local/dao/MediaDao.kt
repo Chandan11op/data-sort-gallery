@@ -24,8 +24,8 @@ interface MediaDao {
     @Query("SELECT * FROM media WHERE isTrashed = 1 ORDER BY dateAdded DESC")
     fun getTrashedMedia(): Flow<List<MediaEntity>>
 
-    @Query("SELECT * FROM media WHERE id = :id")
-    suspend fun getMediaById(id: Long): MediaEntity?
+    @Query("SELECT * FROM media WHERE uniqueId = :uniqueId")
+    suspend fun getMediaById(uniqueId: String): MediaEntity?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertMedia(media: List<MediaEntity>)
@@ -36,17 +36,17 @@ interface MediaDao {
     @Update
     suspend fun updateMedia(media: MediaEntity)
 
-    @Query("UPDATE media SET isFavorite = :isFavorite WHERE id = :id")
-    suspend fun updateFavorite(id: Long, isFavorite: Boolean)
+    @Query("UPDATE media SET isFavorite = :isFavorite WHERE uniqueId = :uniqueId")
+    suspend fun updateFavorite(uniqueId: String, isFavorite: Boolean)
 
-    @Query("UPDATE media SET isTrashed = :isTrashed WHERE id = :id")
-    suspend fun updateTrashed(id: Long, isTrashed: Boolean)
+    @Query("UPDATE media SET isTrashed = :isTrashed WHERE uniqueId = :uniqueId")
+    suspend fun updateTrashed(uniqueId: String, isTrashed: Boolean)
 
-    @Query("DELETE FROM media WHERE id = :id")
-    suspend fun deleteMediaById(id: Long)
+    @Query("DELETE FROM media WHERE uniqueId = :uniqueId")
+    suspend fun deleteMediaById(uniqueId: String)
 
-    @Query("DELETE FROM media WHERE id IN (:ids)")
-    suspend fun deleteMediaByIds(ids: List<Long>)
+    @Query("DELETE FROM media WHERE uniqueId IN (:uniqueIds)")
+    suspend fun deleteMediaByIds(uniqueIds: List<String>)
 
     @Query("SELECT * FROM media WHERE filename LIKE '%' || :query || '%' AND isTrashed = 0")
     fun searchMedia(query: String): Flow<List<MediaEntity>>

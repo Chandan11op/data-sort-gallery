@@ -61,15 +61,15 @@ class RecycleBinViewModel @Inject constructor(
             initialValue = emptyList()
         )
 
-    fun restoreMedia(id: Long) {
+    fun restoreMedia(uniqueId: String) {
         viewModelScope.launch {
-            mediaRepository.toggleTrash(id, false)
+            mediaRepository.toggleTrash(uniqueId, false)
         }
     }
 
-    fun permanentDelete(id: Long) {
+    fun permanentDelete(uniqueId: String) {
         viewModelScope.launch {
-            mediaRepository.deleteMedia(id)
+            mediaRepository.deleteMedia(uniqueId)
         }
     }
 }
@@ -133,7 +133,7 @@ fun RecycleBinScreen(
                     .fillMaxSize()
                     .padding(innerPadding)
             ) {
-                items(trashedList, key = { it.id }) { media ->
+                items(trashedList, key = { it.uniqueId }) { media ->
                     Card(
                         modifier = Modifier.fillMaxWidth()
                     ) {
@@ -153,10 +153,10 @@ fun RecycleBinScreen(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                IconButton(onClick = { viewModel.restoreMedia(media.id) }) {
+                                IconButton(onClick = { viewModel.restoreMedia(media.uniqueId) }) {
                                     Icon(Icons.Default.Restore, contentDescription = "Restore", tint = MaterialTheme.colorScheme.primary)
                                 }
-                                IconButton(onClick = { viewModel.permanentDelete(media.id) }) {
+                                IconButton(onClick = { viewModel.permanentDelete(media.uniqueId) }) {
                                     Icon(Icons.Default.Delete, contentDescription = "Delete", tint = MaterialTheme.colorScheme.error)
                                 }
                             }

@@ -10,7 +10,8 @@ enum class MediaType {
 @Entity(tableName = "media")
 data class MediaEntity(
     @PrimaryKey
-    val id: Long, // MediaStore ID or unique hash-based ID
+    val uniqueId: String, // Unique composite key e.g. "IMAGE_123", "VIDEO_456"
+    val id: Long, // MediaStore ID
     val contentUri: String,
     val filename: String,
     val mimeType: String,

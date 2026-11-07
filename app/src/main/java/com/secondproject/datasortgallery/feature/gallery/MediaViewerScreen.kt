@@ -1,6 +1,5 @@
 package com.secondproject.datasortgallery.feature.gallery
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -32,8 +31,8 @@ import com.secondproject.datasortgallery.data.local.entity.MediaEntity
 fun MediaViewerScreen(
     media: MediaEntity,
     onBackClick: () -> Unit,
-    onFavoriteClick: (Long, Boolean) -> Unit,
-    onDeleteClick: (Long) -> Unit,
+    onFavoriteClick: (String, Boolean) -> Unit,
+    onDeleteClick: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     var isFavorite by remember { mutableStateOf(media.isFavorite) }
@@ -52,7 +51,7 @@ fun MediaViewerScreen(
                     actions = {
                         IconButton(onClick = {
                             isFavorite = !isFavorite
-                            onFavoriteClick(media.id, isFavorite)
+                            onFavoriteClick(media.uniqueId, isFavorite)
                         }) {
                             Icon(
                                 imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
@@ -61,7 +60,7 @@ fun MediaViewerScreen(
                             )
                         }
                         IconButton(onClick = {
-                            onDeleteClick(media.id)
+                            onDeleteClick(media.uniqueId)
                             onBackClick()
                         }) {
                             Icon(Icons.Default.Delete, contentDescription = "Delete", tint = Color.White)

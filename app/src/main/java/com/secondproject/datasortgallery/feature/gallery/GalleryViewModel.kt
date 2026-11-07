@@ -37,22 +37,22 @@ class GalleryViewModel @Inject constructor(
         }
     }
 
-    fun toggleFavorite(id: Long, isFavorite: Boolean) {
+    fun toggleFavorite(uniqueId: String, isFavorite: Boolean) {
         viewModelScope.launch {
-            mediaRepository.toggleFavorite(id, isFavorite)
+            mediaRepository.toggleFavorite(uniqueId, isFavorite)
         }
     }
 
-    fun deleteMedia(id: Long) {
+    fun deleteMedia(uniqueId: String) {
         viewModelScope.launch {
-            mediaRepository.toggleTrash(id, true)
+            mediaRepository.toggleTrash(uniqueId, true)
         }
     }
 
-    fun deleteMultipleMedia(ids: List<Long>) {
+    fun deleteMultipleMedia(uniqueIds: List<String>) {
         viewModelScope.launch {
-            ids.forEach { id ->
-                mediaRepository.toggleTrash(id, true)
+            uniqueIds.forEach { uniqueId ->
+                mediaRepository.toggleTrash(uniqueId, true)
             }
         }
     }
