@@ -79,13 +79,13 @@ class GalleryViewModel @Inject constructor(
 
     private var bulkQueue: MutableList<MediaEntity> = mutableListOf()
     private var bulkCurrentBatchItems: List<MediaEntity> = emptyList()
-    private var bulkBatchSize: Int = 500
+    private var bulkBatchSize: Int = MediaStoreManager.MEDIASTORE_BATCH_SIZE
 
     private var queuedTrashItems: List<MediaEntity> = emptyList()
     private var queuedTrashTarget: Boolean = true
     private var queuedDeleteItems: List<MediaEntity> = emptyList()
 
-    fun startBulkTrash(items: List<MediaEntity>, batchSize: Int = 500) {
+    fun startBulkTrash(items: List<MediaEntity>, batchSize: Int = MediaStoreManager.MEDIASTORE_BATCH_SIZE) {
         if (items.isEmpty()) return
         bulkBatchSize = batchSize
         val total = items.size
@@ -106,7 +106,7 @@ class GalleryViewModel @Inject constructor(
         processNextBulkBatch()
     }
 
-    fun startBulkPermanentDelete(items: List<MediaEntity>, batchSize: Int = 500) {
+    fun startBulkPermanentDelete(items: List<MediaEntity>, batchSize: Int = MediaStoreManager.MEDIASTORE_BATCH_SIZE) {
         if (items.isEmpty()) return
         bulkBatchSize = batchSize
         val total = items.size
@@ -215,8 +215,8 @@ class GalleryViewModel @Inject constructor(
         viewModelScope.launch {
             _isProcessing.value = true
             try {
-                val batch = items.take(MediaStoreManager.MAX_BATCH_SIZE)
-                queuedTrashItems = items.drop(MediaStoreManager.MAX_BATCH_SIZE)
+                val batch = items.take(MediaStoreManager.MEDIASTORE_BATCH_SIZE)
+                queuedTrashItems = items.drop(MediaStoreManager.MEDIASTORE_BATCH_SIZE)
                 queuedTrashTarget = trash
 
                 when (val result = mediaStoreManager.prepareTrashRequest(batch, trash)) {
@@ -254,8 +254,8 @@ class GalleryViewModel @Inject constructor(
         viewModelScope.launch {
             _isProcessing.value = true
             try {
-                val batch = items.take(MediaStoreManager.MAX_BATCH_SIZE)
-                queuedDeleteItems = items.drop(MediaStoreManager.MAX_BATCH_SIZE)
+                val batch = items.take(MediaStoreManager.MEDIASTORE_BATCH_SIZE)
+                queuedDeleteItems = items.drop(MediaStoreManager.MEDIASTORE_BATCH_SIZE)
 
                 when (val result = mediaStoreManager.prepareDeleteRequest(batch)) {
                     is MediaOperationResult.RequiresConsent -> {

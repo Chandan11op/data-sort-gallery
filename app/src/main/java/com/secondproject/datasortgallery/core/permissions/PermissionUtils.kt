@@ -6,7 +6,36 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.content.ContextCompat
 
+import android.content.Intent
+import android.net.Uri
+import android.provider.MediaStore
+import android.provider.Settings
+
 object PermissionUtils {
+
+    fun isManageMediaSupported(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+
+    fun hasManageMediaPermission(context: Context): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            try {
+                MediaStore.canManageMedia(context)
+            } catch (e: Exception) {
+                false
+            }
+        } else {
+            false
+        }
+    }
+
+    fun createManageMediaIntent(context: Context): Intent? {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            Intent(Settings.ACTION_REQUEST_MANAGE_MEDIA).apply {
+                data = Uri.parse("package:${context.packageName}")
+            }
+        } else {
+            null
+        }
+    }
 
     fun getRequiredMediaPermissions(): Array<String> {
         return when {

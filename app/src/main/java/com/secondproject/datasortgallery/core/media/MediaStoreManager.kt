@@ -43,7 +43,20 @@ class MediaStoreManager @Inject constructor(
 ) {
     companion object {
         private const val TAG = "MediaStoreManager"
-        const val MAX_BATCH_SIZE = 500
+        const val MEDIASTORE_BATCH_SIZE = 1800
+        const val ROOM_CHUNK_SIZE = 500
+    }
+
+    fun canManageMedia(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            try {
+                MediaStore.canManageMedia(context)
+            } catch (e: Exception) {
+                false
+            }
+        } else {
+            false
+        }
     }
 
     suspend fun prepareTrashRequest(
@@ -56,11 +69,11 @@ class MediaStoreManager @Inject constructor(
         }
 
         try {
-            // Cap at MAX_BATCH_SIZE (500) to strictly stay below Android's 2000 URI limit and prevent Binder overflow
-            val batch = items.take(MAX_BATCH_SIZE)
+            // Cap at MEDIASTORE_BATCH_SIZE (1,800) to safely stay below Android's 2,000 limit
+            val batch = items.take(MEDIASTORE_BATCH_SIZE)
             val (existingItems, missingUniqueIds) = verifyAndFilterExistingMedia(batch)
             if (missingUniqueIds.isNotEmpty()) {
-                Log.d(TAG, "Cleaning up ${missingUniqueIds.size} already deleted items from database")
+                Log.d(TAG, "Cleaning up ${missingUniqueIds.size} invalid items from database")
                 mediaDao.deleteMediaByIdsChunked(missingUniqueIds)
             }
 
@@ -85,8 +98,7 @@ class MediaStoreManager @Inject constructor(
                     )
                 )
             } else {
-                // Pre-Android 11 fallback: MediaStore trash API is not available
-                // Update local database trash status directly
+                // Pre-Android 11 fallback
                 MediaOperationResult.Completed(validUniqueIds, actionType)
             }
         } catch (e: Exception) {
@@ -104,11 +116,11 @@ class MediaStoreManager @Inject constructor(
         }
 
         try {
-            // Cap at MAX_BATCH_SIZE (500) to strictly stay below Android's 2000 URI limit and prevent Binder overflow
-            val batch = items.take(MAX_BATCH_SIZE)
+            // Cap at MEDIASTORE_BATCH_SIZE (1,800) to safely stay below Android's 2,000 limit
+            val batch = items.take(MEDIASTORE_BATCH_SIZE)
             val (existingItems, missingUniqueIds) = verifyAndFilterExistingMedia(batch)
             if (missingUniqueIds.isNotEmpty()) {
-                Log.d(TAG, "Cleaning up ${missingUniqueIds.size} already deleted items from database")
+                Log.d(TAG, "Cleaning up ${missingUniqueIds.size} invalid items from database")
                 mediaDao.deleteMediaByIdsChunked(missingUniqueIds)
             }
 
@@ -123,6 +135,18 @@ class MediaStoreManager @Inject constructor(
                 return@withContext MediaOperationResult.Completed(emptyList(), actionType)
             }
 
+            // If MANAGE_MEDIA permission is granted on Android 12+, perform direct deletion
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && canManageMedia()) {
+                for (uri in validUris) {
+                    try {
+                        context.contentResolver.delete(uri, null, null)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed direct delete for $uri: ${e.message}")
+                    }
+                }
+                return@withContext MediaOperationResult.Completed(validUniqueIds, actionType)
+            }
+
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 val pendingIntent = MediaStore.createDeleteRequest(context.contentResolver, validUris)
                 MediaOperationResult.RequiresConsent(
@@ -133,7 +157,7 @@ class MediaStoreManager @Inject constructor(
                     )
                 )
             } else if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q) {
-                // Android 10 (Q): Catch RecoverableSecurityException if user consent needed
+                // Android 10 (Q) RecoverableSecurityException handling
                 for (uri in validUris) {
                     try {
                         context.contentResolver.delete(uri, null, null)
@@ -173,27 +197,9 @@ class MediaStoreManager @Inject constructor(
         val existing = ArrayList<MediaEntity>(items.size)
         val missingUniqueIds = ArrayList<String>()
 
-        val projection = arrayOf(MediaStore.MediaColumns._ID)
         for (item in items) {
             val uri = parseValidContentUri(item.contentUri)
-            if (uri == null) {
-                missingUniqueIds.add(item.uniqueId)
-                continue
-            }
-
-            var exists = false
-            try {
-                context.contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
-                    if (cursor.moveToFirst()) {
-                        exists = true
-                    }
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "Error querying uri existence: $uri", e)
-                exists = false
-            }
-
-            if (exists) {
+            if (uri != null) {
                 existing.add(item)
             } else {
                 missingUniqueIds.add(item.uniqueId)

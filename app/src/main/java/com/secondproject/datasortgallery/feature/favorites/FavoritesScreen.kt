@@ -28,6 +28,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -52,7 +53,10 @@ fun FavoritesScreen(
     val mediaList by viewModel.mediaList.collectAsState()
     val pendingConsent by viewModel.pendingConsent.collectAsState()
     val favorites = remember(mediaList) { mediaList.filter { it.isFavorite } }
-    var selectedMedia by remember { mutableStateOf<MediaEntity?>(null) }
+    var selectedMediaUniqueId by rememberSaveable { mutableStateOf<String?>(null) }
+    val selectedMedia = remember(selectedMediaUniqueId, favorites) {
+        selectedMediaUniqueId?.let { id -> favorites.find { it.uniqueId == id } }
+    }
 
     val consentLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartIntentSenderForResult()
@@ -81,14 +85,14 @@ fun FavoritesScreen(
             VideoPlayerScreen(
                 videoList = videoList.ifEmpty { listOf(selectedMedia!!) },
                 initialIndex = startIndex,
-                onBackClick = { selectedMedia = null },
+                onBackClick = { selectedMediaUniqueId = null },
                 onFavoriteClick = { id, isFav -> viewModel.toggleFavorite(id, isFav) },
                 onDeleteClick = { id -> viewModel.deleteMedia(id) }
             )
         } else {
             MediaViewerScreen(
                 media = selectedMedia!!,
-                onBackClick = { selectedMedia = null },
+                onBackClick = { selectedMediaUniqueId = null },
                 onFavoriteClick = { id, isFav -> viewModel.toggleFavorite(id, isFav) },
                 onDeleteClick = { id -> viewModel.deleteMedia(id) }
             )
@@ -120,7 +124,7 @@ fun FavoritesScreen(
                     modifier = Modifier
                         .padding(1.dp)
                         .aspectRatio(1f)
-                        .clickable { selectedMedia = media }
+                        .clickable { selectedMediaUniqueId = media.uniqueId }
                 ) {
                     Box(modifier = Modifier.fillMaxSize()) {
                         AsyncImage(

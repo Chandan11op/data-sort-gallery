@@ -2,6 +2,7 @@ package com.secondproject.datasortgallery
 
 import com.secondproject.datasortgallery.core.media.BulkOperationState
 import com.secondproject.datasortgallery.core.media.MediaActionType
+import com.secondproject.datasortgallery.core.media.MediaStoreManager
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -10,33 +11,35 @@ import org.junit.Test
 class BulkOperationTest {
 
     @Test
-    fun testBatchCountCalculation() {
-        fun calculateBatches(total: Int, batchSize: Int = 500): Int {
+    fun testBatchCountCalculationWithMediaStoreBatchSize() {
+        fun calculateBatches(total: Int, batchSize: Int = MediaStoreManager.MEDIASTORE_BATCH_SIZE): Int {
             if (total <= 0) return 0
             return (total + batchSize - 1) / batchSize
         }
 
-        // Test specified boundaries
+        // Test the new MediaStore 1,800 batch size boundaries
         assertEquals(1, calculateBatches(10))
-        assertEquals(1, calculateBatches(499))
         assertEquals(1, calculateBatches(500))
-        assertEquals(2, calculateBatches(501))
-        assertEquals(2, calculateBatches(1000))
-        assertEquals(4, calculateBatches(2000))
-        assertEquals(10, calculateBatches(5000))
-        assertEquals(11, calculateBatches(5250))
+        assertEquals(1, calculateBatches(1144))
+        assertEquals(1, calculateBatches(1800))
+        assertEquals(2, calculateBatches(1801))
+        assertEquals(2, calculateBatches(2144))
+        assertEquals(2, calculateBatches(3600))
+        assertEquals(3, calculateBatches(3601))
+        assertEquals(3, calculateBatches(5000))
+        assertEquals(3, calculateBatches(5250))
     }
 
     @Test
-    fun testChunkingIntegrity() {
+    fun testRoomDatabaseChunkingIntegrity() {
         val totalItems = (1..5250).map { "item_$it" }
-        val batches = totalItems.chunked(500)
+        val chunks = totalItems.chunked(MediaStoreManager.ROOM_CHUNK_SIZE)
 
-        assertEquals(11, batches.size)
-        assertEquals(500, batches[0].size)
-        assertEquals(500, batches[9].size)
-        assertEquals(250, batches[10].size)
-        assertEquals(5250, batches.flatten().size)
+        assertEquals(11, chunks.size)
+        assertEquals(500, chunks[0].size)
+        assertEquals(500, chunks[9].size)
+        assertEquals(250, chunks[10].size)
+        assertEquals(5250, chunks.flatten().size)
     }
 
     @Test
@@ -46,8 +49,8 @@ class BulkOperationTest {
             totalFiles = 4250,
             processedFiles = 1500,
             failedFiles = 0,
-            currentBatch = 4,
-            totalBatches = 9,
+            currentBatch = 2,
+            totalBatches = 3,
             recoveredBytes = 1500L * 1024L * 1024L,
             totalBytesToRecover = 4250L * 1024L * 1024L,
             isRunning = true
@@ -70,4 +73,3 @@ class BulkOperationTest {
         assertEquals("2.50 GB", BulkOperationState.formatBytes((2.5 * 1024 * 1024 * 1024).toLong()))
     }
 }
-

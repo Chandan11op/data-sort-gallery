@@ -46,6 +46,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -112,8 +113,8 @@ class RecycleBinViewModel @Inject constructor(
         viewModelScope.launch {
             _isProcessing.value = true
             try {
-                val batch = items.take(MediaStoreManager.MAX_BATCH_SIZE)
-                queuedRestoreItems = items.drop(MediaStoreManager.MAX_BATCH_SIZE)
+                val batch = items.take(MediaStoreManager.MEDIASTORE_BATCH_SIZE)
+                queuedRestoreItems = items.drop(MediaStoreManager.MEDIASTORE_BATCH_SIZE)
                 when (val result = mediaStoreManager.prepareTrashRequest(batch, false)) {
                     is MediaOperationResult.RequiresConsent -> {
                         _pendingConsent.value = result.request
@@ -148,8 +149,8 @@ class RecycleBinViewModel @Inject constructor(
         viewModelScope.launch {
             _isProcessing.value = true
             try {
-                val batch = items.take(MediaStoreManager.MAX_BATCH_SIZE)
-                queuedDeleteItems = items.drop(MediaStoreManager.MAX_BATCH_SIZE)
+                val batch = items.take(MediaStoreManager.MEDIASTORE_BATCH_SIZE)
+                queuedDeleteItems = items.drop(MediaStoreManager.MEDIASTORE_BATCH_SIZE)
                 when (val result = mediaStoreManager.prepareDeleteRequest(batch)) {
                     is MediaOperationResult.RequiresConsent -> {
                         _pendingConsent.value = result.request
@@ -268,7 +269,10 @@ fun RecycleBinScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     var showEmptyTrashDialog by remember { mutableStateOf(false) }
     var itemToDeletePermanently by remember { mutableStateOf<MediaEntity?>(null) }
-    var previewMedia by remember { mutableStateOf<MediaEntity?>(null) }
+    var previewMediaUniqueId by rememberSaveable { mutableStateOf<String?>(null) }
+    val previewMedia = remember(previewMediaUniqueId, trashedList) {
+        previewMediaUniqueId?.let { id -> trashedList.find { it.uniqueId == id } }
+    }
 
     val consentLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartIntentSenderForResult()
@@ -302,12 +306,12 @@ fun RecycleBinScreen(
             VideoPlayerScreen(
                 videoList = listOf(previewMedia!!),
                 initialIndex = 0,
-                onBackClick = { previewMedia = null }
+                onBackClick = { previewMediaUniqueId = null }
             )
         } else {
             MediaViewerScreen(
                 media = previewMedia!!,
-                onBackClick = { previewMedia = null },
+                onBackClick = { previewMediaUniqueId = null },
                 onFavoriteClick = { _, _ -> },
                 onDeleteClick = { id -> viewModel.permanentDelete(id) }
             )
@@ -439,7 +443,7 @@ fun RecycleBinScreen(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .aspectRatio(1f)
-                                    .clickable { previewMedia = media }
+                                    .clickable { previewMediaUniqueId = media.uniqueId }
                             )
                             Row(
                                 modifier = Modifier

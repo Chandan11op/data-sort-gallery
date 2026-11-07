@@ -41,6 +41,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import com.secondproject.datasortgallery.data.local.entity.MediaEntity
 import com.secondproject.datasortgallery.data.local.entity.MediaType
+import androidx.compose.runtime.saveable.rememberSaveable
 import com.secondproject.datasortgallery.feature.videos.VideoPlayerScreen
 import com.secondproject.datasortgallery.feature.videos.formatDuration
 
@@ -52,7 +53,10 @@ fun GalleryScreen(
 ) {
     val mediaList by viewModel.mediaList.collectAsState()
     val pendingConsent by viewModel.pendingConsent.collectAsState()
-    var selectedMedia by remember { mutableStateOf<MediaEntity?>(null) }
+    var selectedMediaUniqueId by rememberSaveable { mutableStateOf<String?>(null) }
+    val selectedMedia = remember(selectedMediaUniqueId, mediaList) {
+        selectedMediaUniqueId?.let { id -> mediaList.find { it.uniqueId == id } }
+    }
 
     val consentLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartIntentSenderForResult()
@@ -81,14 +85,14 @@ fun GalleryScreen(
             VideoPlayerScreen(
                 videoList = videoList.ifEmpty { listOf(selectedMedia!!) },
                 initialIndex = startIndex,
-                onBackClick = { selectedMedia = null },
+                onBackClick = { selectedMediaUniqueId = null },
                 onFavoriteClick = { id, isFav -> viewModel.toggleFavorite(id, isFav) },
                 onDeleteClick = { id -> viewModel.deleteMedia(id) }
             )
         } else {
             MediaViewerScreen(
                 media = selectedMedia!!,
-                onBackClick = { selectedMedia = null },
+                onBackClick = { selectedMediaUniqueId = null },
                 onFavoriteClick = { id, isFav -> viewModel.toggleFavorite(id, isFav) },
                 onDeleteClick = { id -> viewModel.deleteMedia(id) }
             )
@@ -127,7 +131,7 @@ fun GalleryScreen(
                 items(mediaList, key = { it.uniqueId }) { media ->
                     MediaThumbnailItem(
                         media = media,
-                        onClick = { selectedMedia = media }
+                        onClick = { selectedMediaUniqueId = media.uniqueId }
                     )
                 }
             }

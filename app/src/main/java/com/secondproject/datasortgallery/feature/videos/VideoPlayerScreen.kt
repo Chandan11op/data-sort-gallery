@@ -4,11 +4,15 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.pm.ActivityInfo
+import android.content.res.Configuration
+import android.media.AudioManager
 import android.net.Uri
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import androidx.activity.compose.BackHandler
 import androidx.annotation.OptIn
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
@@ -22,15 +26,20 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -50,41 +59,97 @@ fun VideoPlayerScreen(
     videoList: List<MediaEntity>,
     initialIndex: Int,
     onBackClick: () -> Unit,
+    onCurrentVideoChanged: ((MediaEntity) -> Unit)? = null,
     onDeleteClick: ((String) -> Unit)? = null,
     onFavoriteClick: ((String, Boolean) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    var currentIndex by remember { mutableIntStateOf(initialIndex.coerceIn(0, (videoList.size - 1).coerceAtLeast(0))) }
+    val activity = remember(context) { context.findActivity() }
+
+    // Persistent playback state across configuration changes (rotation)
+    var currentIndex by rememberSaveable { mutableIntStateOf(initialIndex.coerceIn(0, (videoList.size - 1).coerceAtLeast(0))) }
     val currentVideo = videoList.getOrNull(currentIndex)
 
-    var isPlaying by remember { mutableStateOf(true) }
-    var currentPositionMs by remember { mutableLongStateOf(0L) }
-    var durationMs by remember { mutableLongStateOf(currentVideo?.duration ?: 0L) }
+    var isPlaying by rememberSaveable { mutableStateOf(true) }
+    var currentPositionMs by rememberSaveable { mutableLongStateOf(0L) }
+    var durationMs by rememberSaveable { mutableLongStateOf(currentVideo?.duration ?: 0L) }
     var isBuffering by remember { mutableStateOf(true) }
     var playbackError by remember { mutableStateOf<String?>(null) }
-    var playbackSpeed by remember { mutableFloatStateOf(1.0f) }
-    var isMuted by remember { mutableStateOf(false) }
-    var showControls by remember { mutableStateOf(true) }
+    var playbackSpeed by rememberSaveable { mutableFloatStateOf(1.0f) }
+    var isMuted by rememberSaveable { mutableStateOf(false) }
+    var showControls by rememberSaveable { mutableStateOf(true) }
+    var isScrubbing by remember { mutableStateOf(false) }
+    var lastInteractionTime by remember { mutableLongStateOf(System.currentTimeMillis()) }
+
     var showSpeedDialog by remember { mutableStateOf(false) }
-    var isLandscape by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var isFavorite by remember { mutableStateOf(currentVideo?.isFavorite == true) }
 
+    val configuration = LocalConfiguration.current
+    val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+
+    // Sync active video with parent
     LaunchedEffect(currentVideo) {
-        isFavorite = currentVideo?.isFavorite == true
+        if (currentVideo != null) {
+            onCurrentVideoChanged?.invoke(currentVideo)
+            isFavorite = currentVideo.isFavorite
+        }
     }
 
+    // Hardware volume buttons & system UI cleanup on exit
+    DisposableEffect(activity) {
+        val originalStream = activity?.volumeControlStream
+        activity?.volumeControlStream = AudioManager.STREAM_MUSIC
+        onDispose {
+            if (originalStream != null) {
+                activity.volumeControlStream = originalStream
+            }
+            // Restore system bars
+            val window = activity?.window
+            if (window != null) {
+                val insetsController = WindowCompat.getInsetsController(window, window.decorView)
+                insetsController.show(WindowInsetsCompat.Type.systemBars())
+            }
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+    }
+
+    // Immersive mode: Show/hide system bars (status & navigation bars) synchronously with controls
+    LaunchedEffect(showControls) {
+        val window = activity?.window ?: return@LaunchedEffect
+        val insetsController = WindowCompat.getInsetsController(window, window.decorView)
+        insetsController.systemBarsBehavior =
+            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        if (showControls) {
+            insetsController.show(WindowInsetsCompat.Type.systemBars())
+        } else {
+            insetsController.hide(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+
+    // Handle Android system back button
+    BackHandler {
+        val window = activity?.window
+        if (window != null) {
+            val insetsController = WindowCompat.getInsetsController(window, window.decorView)
+            insetsController.show(WindowInsetsCompat.Type.systemBars())
+        }
+        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        onBackClick()
+    }
+
+    // ExoPlayer single instance
     val exoPlayer = remember {
         ExoPlayer.Builder(context).build().apply {
             playWhenReady = true
         }
     }
 
-    // Auto-hide controls after 4 seconds when playing
-    LaunchedEffect(showControls, isPlaying) {
-        if (showControls && isPlaying) {
-            delay(4000)
+    // Auto-hide controls after 2.5 seconds of inactivity when video is playing and not scrubbing
+    LaunchedEffect(showControls, isPlaying, isScrubbing, lastInteractionTime, showSpeedDialog, showDeleteConfirm) {
+        if (showControls && isPlaying && !isScrubbing && !showSpeedDialog && !showDeleteConfirm) {
+            delay(2500)
             showControls = false
         }
     }
@@ -92,27 +157,37 @@ fun VideoPlayerScreen(
     // Update playback position smoothly
     LaunchedEffect(isPlaying, isBuffering) {
         while (isPlaying && !isBuffering) {
-            currentPositionMs = exoPlayer.currentPosition.coerceAtLeast(0L)
-            if (exoPlayer.duration > 0) {
-                durationMs = exoPlayer.duration
+            if (!isScrubbing) {
+                currentPositionMs = exoPlayer.currentPosition.coerceAtLeast(0L)
+                if (exoPlayer.duration > 0) {
+                    durationMs = exoPlayer.duration
+                }
             }
             delay(250)
         }
     }
 
-    // Load media item when current video changes
+    // Load media item only when current video contentUri changes
     LaunchedEffect(currentVideo?.contentUri) {
         if (currentVideo != null) {
-            playbackError = null
-            isBuffering = true
-            try {
-                val mediaItem = MediaItem.fromUri(Uri.parse(currentVideo.contentUri))
-                exoPlayer.setMediaItem(mediaItem)
-                exoPlayer.prepare()
-                exoPlayer.play()
-            } catch (e: Exception) {
-                playbackError = "Error loading video: ${e.localizedMessage ?: "File unavailable"}"
-                isBuffering = false
+            val currentLoadedUri = exoPlayer.currentMediaItem?.localConfiguration?.uri?.toString()
+            if (currentLoadedUri != currentVideo.contentUri) {
+                playbackError = null
+                isBuffering = true
+                try {
+                    val mediaItem = MediaItem.fromUri(Uri.parse(currentVideo.contentUri))
+                    exoPlayer.setMediaItem(mediaItem)
+                    exoPlayer.prepare()
+                    if (currentPositionMs > 0L) {
+                        exoPlayer.seekTo(currentPositionMs)
+                    }
+                    if (isPlaying) {
+                        exoPlayer.play()
+                    }
+                } catch (e: Exception) {
+                    playbackError = "Error loading video: ${e.localizedMessage ?: "File unavailable"}"
+                    isBuffering = false
+                }
             }
         } else {
             playbackError = "Video not found"
@@ -132,11 +207,11 @@ fun VideoPlayerScreen(
                     durationMs = exoPlayer.duration.coerceAtLeast(0L)
                     playbackError = null
                 } else if (playbackState == Player.STATE_ENDED) {
-                    // Automatically go to next video if available
                     if (currentIndex < videoList.size - 1) {
                         currentIndex++
                     } else {
                         isPlaying = false
+                        showControls = true
                     }
                 }
             }
@@ -144,6 +219,7 @@ fun VideoPlayerScreen(
             override fun onPlayerError(error: PlaybackException) {
                 isBuffering = false
                 isPlaying = false
+                showControls = true
                 playbackError = when (error.errorCode) {
                     PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
                     PlaybackException.ERROR_CODE_DECODING_FAILED -> "Video codec not supported by this device"
@@ -181,17 +257,13 @@ fun VideoPlayerScreen(
         }
     }
 
-    // Restore orientation when leaving player
-    DisposableEffect(Unit) {
-        onDispose {
-            context.findActivity()?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-        }
-    }
-
     // Delete Confirmation Dialog
     if (showDeleteConfirm && currentVideo != null) {
         AlertDialog(
-            onDismissRequest = { showDeleteConfirm = false },
+            onDismissRequest = {
+                showDeleteConfirm = false
+                lastInteractionTime = System.currentTimeMillis()
+            },
             icon = { Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
             title = { Text("Move Video to Recycle Bin") },
             text = { Text("Move \"${currentVideo.filename}\" to the Recycle Bin?") },
@@ -199,7 +271,7 @@ fun VideoPlayerScreen(
                 Button(
                     onClick = {
                         showDeleteConfirm = false
-                        onDeleteClick?.invoke(currentVideo.uniqueId)
+                        val deletedId = currentVideo.uniqueId
                         if (videoList.size > 1) {
                             if (currentIndex < videoList.size - 1) {
                                 currentIndex++
@@ -209,13 +281,17 @@ fun VideoPlayerScreen(
                         } else {
                             onBackClick()
                         }
+                        onDeleteClick?.invoke(deletedId)
                     }
                 ) {
                     Text("Move to Trash")
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showDeleteConfirm = false }) {
+                TextButton(onClick = {
+                    showDeleteConfirm = false
+                    lastInteractionTime = System.currentTimeMillis()
+                }) {
                     Text("Cancel")
                 }
             }
@@ -225,7 +301,10 @@ fun VideoPlayerScreen(
     // Playback Speed Dialog
     if (showSpeedDialog) {
         AlertDialog(
-            onDismissRequest = { showSpeedDialog = false },
+            onDismissRequest = {
+                showSpeedDialog = false
+                lastInteractionTime = System.currentTimeMillis()
+            },
             title = { Text("Playback Speed") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -238,6 +317,7 @@ fun VideoPlayerScreen(
                                     playbackSpeed = speed
                                     exoPlayer.setPlaybackSpeed(speed)
                                     showSpeedDialog = false
+                                    lastInteractionTime = System.currentTimeMillis()
                                 }
                                 .padding(vertical = 12.dp, horizontal = 8.dp)
                         ) {
@@ -247,6 +327,7 @@ fun VideoPlayerScreen(
                                     playbackSpeed = speed
                                     exoPlayer.setPlaybackSpeed(speed)
                                     showSpeedDialog = false
+                                    lastInteractionTime = System.currentTimeMillis()
                                 }
                             )
                             Spacer(modifier = Modifier.width(12.dp))
@@ -260,13 +341,17 @@ fun VideoPlayerScreen(
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showSpeedDialog = false }) {
+                TextButton(onClick = {
+                    showSpeedDialog = false
+                    lastInteractionTime = System.currentTimeMillis()
+                }) {
                     Text("Close")
                 }
             }
         )
     }
 
+    // Main Player Layout
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -276,6 +361,7 @@ fun VideoPlayerScreen(
                 indication = null
             ) {
                 showControls = !showControls
+                lastInteractionTime = System.currentTimeMillis()
             }
     ) {
         // Media3 ExoPlayer Surface View
@@ -356,17 +442,23 @@ fun VideoPlayerScreen(
             }
         }
 
-        // Controls Overlay
+        // Controls Overlay with smooth fade in/out
         AnimatedVisibility(
             visible = showControls,
-            enter = fadeIn(),
-            exit = fadeOut(),
+            enter = fadeIn(animationSpec = tween(250)),
+            exit = fadeOut(animationSpec = tween(250)),
             modifier = Modifier.fillMaxSize()
         ) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(Color.Black.copy(alpha = 0.45f))
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) {
+                        showControls = false
+                    }
             ) {
                 // Top App Bar
                 Row(
@@ -376,8 +468,19 @@ fun VideoPlayerScreen(
                         .statusBarsPadding()
                         .padding(horizontal = 8.dp, vertical = 4.dp)
                         .align(Alignment.TopCenter)
+                        .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                            lastInteractionTime = System.currentTimeMillis()
+                        }
                 ) {
-                    IconButton(onClick = onBackClick) {
+                    IconButton(onClick = {
+                        val window = activity?.window
+                        if (window != null) {
+                            val insetsController = WindowCompat.getInsetsController(window, window.decorView)
+                            insetsController.show(WindowInsetsCompat.Type.systemBars())
+                        }
+                        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                        onBackClick()
+                    }) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Back",
@@ -427,6 +530,7 @@ fun VideoPlayerScreen(
                     // Favorite Button
                     if (onFavoriteClick != null && currentVideo != null) {
                         IconButton(onClick = {
+                            lastInteractionTime = System.currentTimeMillis()
                             isFavorite = !isFavorite
                             onFavoriteClick(currentVideo.uniqueId, isFavorite)
                         }) {
@@ -440,7 +544,10 @@ fun VideoPlayerScreen(
 
                     // Delete Button
                     if (onDeleteClick != null && currentVideo != null) {
-                        IconButton(onClick = { showDeleteConfirm = true }) {
+                        IconButton(onClick = {
+                            lastInteractionTime = System.currentTimeMillis()
+                            showDeleteConfirm = true
+                        }) {
                             Icon(
                                 imageVector = Icons.Default.Delete,
                                 contentDescription = "Delete",
@@ -454,11 +561,18 @@ fun VideoPlayerScreen(
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(20.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.align(Alignment.Center)
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                            lastInteractionTime = System.currentTimeMillis()
+                        }
                 ) {
                     // Previous Video
                     IconButton(
-                        onClick = { if (currentIndex > 0) currentIndex-- },
+                        onClick = {
+                            lastInteractionTime = System.currentTimeMillis()
+                            if (currentIndex > 0) currentIndex--
+                        },
                         enabled = currentIndex > 0,
                         modifier = Modifier
                             .size(48.dp)
@@ -475,6 +589,7 @@ fun VideoPlayerScreen(
                     // Rewind 10s
                     IconButton(
                         onClick = {
+                            lastInteractionTime = System.currentTimeMillis()
                             exoPlayer.seekTo((exoPlayer.currentPosition - 10000).coerceAtLeast(0))
                         },
                         modifier = Modifier
@@ -492,6 +607,7 @@ fun VideoPlayerScreen(
                     // Play / Pause
                     IconButton(
                         onClick = {
+                            lastInteractionTime = System.currentTimeMillis()
                             if (isPlaying) {
                                 exoPlayer.pause()
                             } else {
@@ -516,6 +632,7 @@ fun VideoPlayerScreen(
                     // Forward 10s
                     IconButton(
                         onClick = {
+                            lastInteractionTime = System.currentTimeMillis()
                             exoPlayer.seekTo((exoPlayer.currentPosition + 10000).coerceAtMost(durationMs))
                         },
                         modifier = Modifier
@@ -532,7 +649,10 @@ fun VideoPlayerScreen(
 
                     // Next Video
                     IconButton(
-                        onClick = { if (currentIndex < videoList.size - 1) currentIndex++ },
+                        onClick = {
+                            lastInteractionTime = System.currentTimeMillis()
+                            if (currentIndex < videoList.size - 1) currentIndex++
+                        },
                         enabled = currentIndex < videoList.size - 1,
                         modifier = Modifier
                             .size(48.dp)
@@ -554,6 +674,9 @@ fun VideoPlayerScreen(
                         .align(Alignment.BottomCenter)
                         .navigationBarsPadding()
                         .padding(horizontal = 16.dp, vertical = 12.dp)
+                        .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                            lastInteractionTime = System.currentTimeMillis()
+                        }
                 ) {
                     // Time and Progress Scrubber
                     Row(
@@ -569,11 +692,17 @@ fun VideoPlayerScreen(
                         )
 
                         Slider(
-                            value = if (durationMs > 0) currentPositionMs.toFloat() / durationMs.toFloat() else 0f,
+                            value = if (durationMs > 0) (currentPositionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f) else 0f,
                             onValueChange = { fraction ->
+                                isScrubbing = true
+                                lastInteractionTime = System.currentTimeMillis()
                                 val newPos = (fraction * durationMs).toLong()
                                 currentPositionMs = newPos
-                                exoPlayer.seekTo(newPos)
+                            },
+                            onValueChangeFinished = {
+                                exoPlayer.seekTo(currentPositionMs)
+                                isScrubbing = false
+                                lastInteractionTime = System.currentTimeMillis()
                             },
                             colors = SliderDefaults.colors(
                                 thumbColor = MaterialTheme.colorScheme.primary,
@@ -602,6 +731,7 @@ fun VideoPlayerScreen(
                     ) {
                         // Mute Toggle
                         IconButton(onClick = {
+                            lastInteractionTime = System.currentTimeMillis()
                             isMuted = !isMuted
                             exoPlayer.volume = if (isMuted) 0f else 1f
                         }) {
@@ -618,7 +748,10 @@ fun VideoPlayerScreen(
                         ) {
                             // Speed Button
                             TextButton(
-                                onClick = { showSpeedDialog = true },
+                                onClick = {
+                                    lastInteractionTime = System.currentTimeMillis()
+                                    showSpeedDialog = true
+                                },
                                 colors = ButtonDefaults.textButtonColors(contentColor = Color.White)
                             ) {
                                 Icon(
@@ -636,12 +769,12 @@ fun VideoPlayerScreen(
 
                             // Fullscreen / Orientation Toggle
                             IconButton(onClick = {
-                                isLandscape = !isLandscape
-                                val activity = context.findActivity()
-                                activity?.requestedOrientation = if (isLandscape) {
-                                    ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+                                lastInteractionTime = System.currentTimeMillis()
+                                val act = context.findActivity()
+                                act?.requestedOrientation = if (isLandscape) {
+                                    ActivityInfo.SCREEN_ORIENTATION_USER_PORTRAIT
                                 } else {
-                                    ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                                    ActivityInfo.SCREEN_ORIENTATION_USER_LANDSCAPE
                                 }
                             }) {
                                 Icon(
@@ -679,4 +812,3 @@ private fun Context.findActivity(): Activity? {
     }
     return null
 }
-

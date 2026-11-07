@@ -53,7 +53,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
+import androidx.compose.runtime.saveable.rememberSaveable
 import com.secondproject.datasortgallery.core.designsystem.components.BulkOperationProgressDialog
+import com.secondproject.datasortgallery.core.media.BulkOperationState
+import com.secondproject.datasortgallery.core.media.MediaStoreManager
 import com.secondproject.datasortgallery.data.local.entity.MediaEntity
 import com.secondproject.datasortgallery.data.local.entity.MediaType
 import com.secondproject.datasortgallery.feature.gallery.GalleryViewModel
@@ -82,7 +85,10 @@ fun DuplicatesScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     var showCleanAllConfirmation by remember { mutableStateOf(false) }
     var itemToTrash by remember { mutableStateOf<MediaEntity?>(null) }
-    var previewMedia by remember { mutableStateOf<MediaEntity?>(null) }
+    var previewMediaUniqueId by rememberSaveable { mutableStateOf<String?>(null) }
+    val previewMedia = remember(previewMediaUniqueId, mediaList) {
+        previewMediaUniqueId?.let { id -> mediaList.find { it.uniqueId == id } }
+    }
 
     val consentLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartIntentSenderForResult()
@@ -151,14 +157,14 @@ fun DuplicatesScreen(
             VideoPlayerScreen(
                 videoList = listOf(previewMedia!!),
                 initialIndex = 0,
-                onBackClick = { previewMedia = null },
+                onBackClick = { previewMediaUniqueId = null },
                 onFavoriteClick = { id, isFav -> viewModel.toggleFavorite(id, isFav) },
                 onDeleteClick = { id -> viewModel.deleteMedia(id) }
             )
         } else {
             MediaViewerScreen(
                 media = previewMedia!!,
-                onBackClick = { previewMedia = null },
+                onBackClick = { previewMediaUniqueId = null },
                 onFavoriteClick = { id, isFav -> viewModel.toggleFavorite(id, isFav) },
                 onDeleteClick = { id -> viewModel.deleteMedia(id) }
             )
@@ -176,7 +182,7 @@ fun DuplicatesScreen(
     }
 
     if (showCleanAllConfirmation) {
-        val totalBatches = (totalDuplicatesCount + 499) / 500
+        val totalBatches = (totalDuplicatesCount + MediaStoreManager.MEDIASTORE_BATCH_SIZE - 1) / MediaStoreManager.MEDIASTORE_BATCH_SIZE
         AlertDialog(
             onDismissRequest = { showCleanAllConfirmation = false },
             icon = { Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
@@ -188,7 +194,7 @@ fun DuplicatesScreen(
                         fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        text = "• Processed in $totalBatches batch(es) of up to 500 files each for maximum stability.\n" +
+                        text = "• Processed in $totalBatches safe batch(es) (up to ${MediaStoreManager.MEDIASTORE_BATCH_SIZE} files per batch).\n" +
                                 "• Android system confirmation will appear for each batch.\n" +
                                 "• The recommended original in each duplicate group is kept safe.\n" +
                                 "• Duplicate copies will be moved to the Recycle Bin.",
@@ -363,7 +369,7 @@ fun DuplicatesScreen(
                                         Row(
                                             modifier = Modifier
                                                 .fillMaxWidth()
-                                                .clickable { previewMedia = media }
+                                                .clickable { previewMediaUniqueId = media.uniqueId }
                                                 .padding(vertical = 4.dp),
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {

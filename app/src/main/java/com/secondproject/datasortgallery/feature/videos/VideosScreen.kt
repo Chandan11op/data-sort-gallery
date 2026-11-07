@@ -20,6 +20,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import com.secondproject.datasortgallery.core.media.MediaStoreManager
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -77,9 +79,6 @@ fun VideosScreen(
     val selectedIds = remember { mutableStateListOf<String>() }
     var showDeleteConfirmDialog by remember { mutableStateOf(false) }
 
-    // Video Player State
-    var playerStartIndex by remember { mutableIntStateOf(-1) }
-
     val consentLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartIntentSenderForResult()
     ) { result ->
@@ -131,12 +130,21 @@ fun VideosScreen(
         }
     }
 
+    // Video Player State - using rememberSaveable so rotation NEVER exits the video
+    var playingVideoUniqueId by rememberSaveable { mutableStateOf<String?>(null) }
+    val playingVideoIndex = remember(playingVideoUniqueId, displayedVideos) {
+        if (playingVideoUniqueId != null) displayedVideos.indexOfFirst { it.uniqueId == playingVideoUniqueId } else -1
+    }
+
     // Launch Built-In Video Player if an item was clicked
-    if (playerStartIndex in displayedVideos.indices) {
+    if (playingVideoIndex in displayedVideos.indices) {
         VideoPlayerScreen(
             videoList = displayedVideos,
-            initialIndex = playerStartIndex,
-            onBackClick = { playerStartIndex = -1 },
+            initialIndex = playingVideoIndex,
+            onBackClick = { playingVideoUniqueId = null },
+            onCurrentVideoChanged = { currentVideo ->
+                playingVideoUniqueId = currentVideo.uniqueId
+            },
             onFavoriteClick = { id, isFav -> viewModel.toggleFavorite(id, isFav) },
             onDeleteClick = { id -> viewModel.deleteMedia(id) }
         )
@@ -162,7 +170,7 @@ fun VideosScreen(
             displayedVideos.filter { selectedIds.contains(it.uniqueId) }
         }
         val totalBytes = itemsToDelete.sumOf { it.size }
-        val batchCount = (itemsToDelete.size + 499) / 500
+        val batchCount = (itemsToDelete.size + MediaStoreManager.MEDIASTORE_BATCH_SIZE - 1) / MediaStoreManager.MEDIASTORE_BATCH_SIZE
 
         AlertDialog(
             onDismissRequest = { showDeleteConfirmDialog = false },
@@ -374,7 +382,7 @@ fun VideosScreen(
                                 if (isSelected) selectedIds.remove(video.uniqueId)
                                 else selectedIds.add(video.uniqueId)
                             } else {
-                                playerStartIndex = displayedVideos.indexOf(video)
+                                playingVideoUniqueId = video.uniqueId
                             }
                         },
                         onLongClick = {
@@ -404,7 +412,7 @@ fun VideosScreen(
                                 if (isSelected) selectedIds.remove(video.uniqueId)
                                 else selectedIds.add(video.uniqueId)
                             } else {
-                                playerStartIndex = displayedVideos.indexOf(video)
+                                playingVideoUniqueId = video.uniqueId
                             }
                         },
                         onLongClick = {
