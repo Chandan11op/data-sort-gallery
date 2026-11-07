@@ -15,6 +15,7 @@ import com.secondproject.datasortgallery.feature.albums.AlbumsScreen
 import com.secondproject.datasortgallery.feature.audio.AudioScreen
 import com.secondproject.datasortgallery.feature.duplicates.DuplicatesScreen
 import com.secondproject.datasortgallery.feature.explore.ExploreScreen
+import com.secondproject.datasortgallery.feature.explore.FilteredMediaScreen
 import com.secondproject.datasortgallery.feature.favorites.FavoritesScreen
 import com.secondproject.datasortgallery.feature.gallery.GalleryScreen
 import com.secondproject.datasortgallery.feature.people.PeopleScreen
@@ -100,13 +101,32 @@ fun MainScreen(
                 PlacesScreen(onBackClick = { navController.popBackStack() })
             }
             composable(Screen.Screenshots.route) {
-                VideosScreen(onBackClick = { navController.popBackStack() })
+                FilteredMediaScreen(
+                    title = "Screenshots",
+                    filterPredicate = { it.relativePath.contains("Screenshot", true) || it.filename.contains("Screenshot", true) },
+                    onBackClick = { navController.popBackStack() }
+                )
             }
             composable(Screen.Downloads.route) {
-                VideosScreen(onBackClick = { navController.popBackStack() })
+                FilteredMediaScreen(
+                    title = "Downloads",
+                    filterPredicate = { it.relativePath.contains("Download", true) },
+                    onBackClick = { navController.popBackStack() }
+                )
             }
             composable(Screen.LargeFiles.route) {
-                VideosScreen(onBackClick = { navController.popBackStack() })
+                FilteredMediaScreen(
+                    title = "Large Files (>20MB)",
+                    filterPredicate = { it.size > 20L * 1024 * 1024 },
+                    onBackClick = { navController.popBackStack() }
+                )
+            }
+            composable(Screen.RecentlyAdded.route) {
+                FilteredMediaScreen(
+                    title = "Recently Added",
+                    filterPredicate = { System.currentTimeMillis() - it.dateAdded < 30L * 24 * 60 * 60 * 1000 },
+                    onBackClick = { navController.popBackStack() }
+                )
             }
             composable(Screen.RecycleBin.route) {
                 RecycleBinScreen(onBackClick = { navController.popBackStack() })

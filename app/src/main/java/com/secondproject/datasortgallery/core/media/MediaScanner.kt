@@ -8,7 +8,6 @@ import com.secondproject.datasortgallery.data.local.entity.MediaType
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -78,6 +77,7 @@ class MediaScanner @Inject constructor(
 
                 images.add(
                     MediaEntity(
+                        uniqueId = "IMAGE_$id",
                         id = id,
                         contentUri = contentUri,
                         filename = name,
@@ -154,6 +154,7 @@ class MediaScanner @Inject constructor(
 
                 videos.add(
                     MediaEntity(
+                        uniqueId = "VIDEO_$id",
                         id = id,
                         contentUri = contentUri,
                         filename = name,
@@ -221,7 +222,8 @@ class MediaScanner @Inject constructor(
 
                 audioList.add(
                     MediaEntity(
-                        id = id + 1_000_000_000L, // offset ID to avoid collision with image/video IDs if any overlap
+                        uniqueId = "AUDIO_$id",
+                        id = id,
                         contentUri = contentUri,
                         filename = name,
                         mimeType = mimeType,

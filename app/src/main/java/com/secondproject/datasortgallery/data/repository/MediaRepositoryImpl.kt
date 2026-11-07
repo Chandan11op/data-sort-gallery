@@ -26,8 +26,8 @@ class MediaRepositoryImpl @Inject constructor(
 
     override fun getTrashedMedia(): Flow<List<MediaEntity>> = mediaDao.getTrashedMedia()
 
-    override suspend fun getMediaById(id: Long): MediaEntity? = withContext(ioDispatcher) {
-        mediaDao.getMediaById(id)
+    override suspend fun getMediaById(uniqueId: String): MediaEntity? = withContext(ioDispatcher) {
+        mediaDao.getMediaById(uniqueId)
     }
 
     override suspend fun scanAndSyncMedia() = withContext(ioDispatcher) {
@@ -37,20 +37,38 @@ class MediaRepositoryImpl @Inject constructor(
         }
     }
 
-    override suspend fun toggleFavorite(id: Long, isFavorite: Boolean) = withContext(ioDispatcher) {
-        mediaDao.updateFavorite(id, isFavorite)
+    override suspend fun toggleFavorite(uniqueId: String, isFavorite: Boolean) = withContext(ioDispatcher) {
+        mediaDao.updateFavorite(uniqueId, isFavorite)
     }
 
-    override suspend fun toggleTrash(id: Long, isTrashed: Boolean) = withContext(ioDispatcher) {
-        mediaDao.updateTrashed(id, isTrashed)
+    override suspend fun toggleTrash(uniqueId: String, isTrashed: Boolean) = withContext(ioDispatcher) {
+        mediaDao.updateTrashed(uniqueId, isTrashed)
     }
 
-    override suspend fun deleteMedia(id: Long) = withContext(ioDispatcher) {
-        mediaDao.deleteMediaById(id)
+    override suspend fun toggleTrashBatch(uniqueIds: List<String>, isTrashed: Boolean) = withContext(ioDispatcher) {
+        if (uniqueIds.isNotEmpty()) {
+            mediaDao.updateTrashedChunked(uniqueIds, isTrashed)
+        }
     }
 
-    override suspend fun deleteMultipleMedia(ids: List<Long>) = withContext(ioDispatcher) {
-        mediaDao.deleteMediaByIds(ids)
+    override suspend fun deleteMedia(uniqueId: String) = withContext(ioDispatcher) {
+        mediaDao.deleteMediaById(uniqueId)
+    }
+
+    override suspend fun deleteMultipleMedia(uniqueIds: List<String>) = withContext(ioDispatcher) {
+        if (uniqueIds.isNotEmpty()) {
+            mediaDao.deleteMediaByIdsChunked(uniqueIds)
+        }
+    }
+
+    override suspend fun deleteMultipleMediaChunked(uniqueIds: List<String>) = withContext(ioDispatcher) {
+        if (uniqueIds.isNotEmpty()) {
+            mediaDao.deleteMediaByIdsChunked(uniqueIds)
+        }
+    }
+
+    override suspend fun getMediaByIds(uniqueIds: List<String>): List<MediaEntity> = withContext(ioDispatcher) {
+        if (uniqueIds.isEmpty()) emptyList() else mediaDao.getMediaByIds(uniqueIds)
     }
 
     override fun searchMedia(query: String): Flow<List<MediaEntity>> = mediaDao.searchMedia(query)

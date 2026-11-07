@@ -1,6 +1,9 @@
 package com.secondproject.datasortgallery.feature.duplicates
 
-import androidx.compose.foundation.background
+import android.app.Activity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,19 +23,27 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -43,6 +54,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
 import com.secondproject.datasortgallery.data.local.entity.MediaEntity
 import com.secondproject.datasortgallery.feature.gallery.GalleryViewModel
+import java.util.Locale
 
 data class DuplicateGroup(
     val key: String,
@@ -57,19 +69,127 @@ fun DuplicatesScreen(
     viewModel: GalleryViewModel = hiltViewModel()
 ) {
     val mediaList by viewModel.mediaList.collectAsState()
+    val pendingConsent by viewModel.pendingConsent.collectAsState()
+    val feedback by viewModel.operationFeedback.collectAsState()
+    val isProcessing by viewModel.isProcessing.collectAsState()
 
-    // Group by file size and resolution as exact duplicate candidates
+    val snackbarHostState = remember { SnackbarHostState() }
+    var showCleanAllConfirmation by remember { mutableStateOf(false) }
+    var itemToTrash by remember { mutableStateOf<MediaEntity?>(null) }
+
+    val consentLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            viewModel.onConsentApproved()
+        } else {
+            viewModel.onConsentDenied()
+        }
+    }
+
+    LaunchedEffect(pendingConsent) {
+        pendingConsent?.let { request ->
+            try {
+                consentLauncher.launch(IntentSenderRequest.Builder(request.intentSender).build())
+            } catch (e: Exception) {
+                viewModel.onConsentDenied()
+            }
+        }
+    }
+
+    LaunchedEffect(feedback) {
+        feedback?.let { msg ->
+            snackbarHostState.showSnackbar(msg)
+            viewModel.clearFeedback()
+        }
+    }
+
+    // Group items safely, ignoring empty or invalid files
     val duplicateGroups = remember(mediaList) {
-        mediaList.groupBy { "${it.size}_${it.resolution}" }
+        mediaList.filter { it.size > 0 }
+            .groupBy { media ->
+                if (!media.sha256Hash.isNullOrBlank()) {
+                    "hash_${media.sha256Hash}"
+                } else if (media.resolution.isNotBlank()) {
+                    "size_res_${media.size}_${media.resolution}"
+                } else {
+                    "size_name_${media.size}_${media.filename}"
+                }
+            }
             .filter { it.value.size > 1 }
             .map { (key, items) -> DuplicateGroup(key, items) }
     }
 
-    val totalRecoverableSize = remember(duplicateGroups) {
+    val totalDuplicatesCount = remember(duplicateGroups) {
+        duplicateGroups.sumOf { (it.items.size - 1).coerceAtLeast(0) }
+    }
+
+    val totalRecoverableBytes = remember(duplicateGroups) {
         duplicateGroups.sumOf { group ->
-            // Keep first item, sum remaining items size
             group.items.drop(1).sumOf { it.size }
-        } / (1024 * 1024)
+        }
+    }
+
+    val totalRecoverableFormatted = remember(totalRecoverableBytes) {
+        if (totalRecoverableBytes >= 1024L * 1024L * 1024L) {
+            String.format(Locale.US, "%.2f GB", totalRecoverableBytes / (1024.0 * 1024.0 * 1024.0))
+        } else {
+            String.format(Locale.US, "%.1f MB", totalRecoverableBytes / (1024.0 * 1024.0))
+        }
+    }
+
+    if (showCleanAllConfirmation) {
+        AlertDialog(
+            onDismissRequest = { showCleanAllConfirmation = false },
+            icon = { Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+            title = { Text("Delete Duplicate Files") },
+            text = {
+                Text("Are you sure you want to clean $totalDuplicatesCount duplicate files ($totalRecoverableFormatted)? The original file in each group will be kept safe, and duplicate copies will be moved to the Recycle Bin.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showCleanAllConfirmation = false
+                        val allDuplicatesToDelete = duplicateGroups.flatMap { it.items.drop(1) }
+                        viewModel.trashMedia(allDuplicatesToDelete)
+                    }
+                ) {
+                    Text("Delete Duplicate Files")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCleanAllConfirmation = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    if (itemToTrash != null) {
+        AlertDialog(
+            onDismissRequest = { itemToTrash = null },
+            icon = { Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
+            title = { Text("Delete Duplicate") },
+            text = {
+                Text("Move \"${itemToTrash?.filename}\" to the Recycle Bin?")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val item = itemToTrash!!
+                        itemToTrash = null
+                        viewModel.trashMedia(listOf(item))
+                    }
+                ) {
+                    Text("Delete")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { itemToTrash = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 
     Scaffold(
@@ -83,6 +203,7 @@ fun DuplicatesScreen(
                 }
             )
         },
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         modifier = modifier
     ) { innerPadding ->
         if (duplicateGroups.isEmpty()) {
@@ -131,24 +252,34 @@ fun DuplicatesScreen(
                             color = MaterialTheme.colorScheme.primary
                         )
                         Text(
-                            text = "$totalRecoverableSize MB",
+                            text = totalRecoverableFormatted,
                             style = MaterialTheme.typography.headlineMedium,
                             fontWeight = FontWeight.Bold
                         )
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "$totalDuplicatesCount duplicate items across ${duplicateGroups.size} groups",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
                         Button(
-                            onClick = {
-                                // Delete all duplicates except the first one in each group
-                                duplicateGroups.forEach { group ->
-                                    val duplicatesToDelete = group.items.drop(1).map { it.id }
-                                    viewModel.deleteMultipleMedia(duplicatesToDelete)
-                                }
-                            },
+                            onClick = { showCleanAllConfirmation = true },
+                            enabled = !isProcessing && totalDuplicatesCount > 0,
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Icon(Icons.Default.Delete, contentDescription = null)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Clean All Duplicates")
+                            if (isProcessing) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(20.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.onPrimary
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Processing...")
+                            } else {
+                                Icon(Icons.Default.Delete, contentDescription = null)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Delete Duplicate Files ($totalDuplicatesCount)")
+                            }
                         }
                     }
                 }
@@ -163,8 +294,9 @@ fun DuplicatesScreen(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Column(modifier = Modifier.padding(16.dp)) {
+                                val firstItemSizeKb = group.items.firstOrNull()?.size?.div(1024) ?: 0
                                 Text(
-                                    text = "Group (${group.items.size} identical files, ${group.items.first().size / 1024} KB each)",
+                                    text = "Group (${group.items.size} identical files, $firstItemSizeKb KB each)",
                                     style = MaterialTheme.typography.titleSmall,
                                     fontWeight = FontWeight.SemiBold
                                 )
@@ -197,8 +329,15 @@ fun DuplicatesScreen(
                                                 )
                                             }
                                             if (index > 0) {
-                                                IconButton(onClick = { viewModel.deleteMedia(media.id) }) {
-                                                    Icon(Icons.Default.Delete, contentDescription = "Delete", tint = MaterialTheme.colorScheme.error)
+                                                IconButton(
+                                                    onClick = { itemToTrash = media },
+                                                    enabled = !isProcessing
+                                                ) {
+                                                    Icon(
+                                                        Icons.Default.Delete,
+                                                        contentDescription = "Delete",
+                                                        tint = MaterialTheme.colorScheme.error
+                                                    )
                                                 }
                                             }
                                         }
