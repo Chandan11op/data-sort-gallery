@@ -18,6 +18,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -34,8 +35,14 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
 import com.secondproject.datasortgallery.core.designsystem.components.AppTopBar
 import com.secondproject.datasortgallery.core.designsystem.components.EmptyState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Surface
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
 import com.secondproject.datasortgallery.data.local.entity.MediaEntity
 import com.secondproject.datasortgallery.data.local.entity.MediaType
+import com.secondproject.datasortgallery.feature.videos.VideoPlayerScreen
+import com.secondproject.datasortgallery.feature.videos.formatDuration
 
 @Composable
 fun GalleryScreen(
@@ -68,12 +75,24 @@ fun GalleryScreen(
     }
 
     if (selectedMedia != null) {
-        MediaViewerScreen(
-            media = selectedMedia!!,
-            onBackClick = { selectedMedia = null },
-            onFavoriteClick = { id, isFav -> viewModel.toggleFavorite(id, isFav) },
-            onDeleteClick = { id -> viewModel.deleteMedia(id) }
-        )
+        if (selectedMedia!!.mediaType == MediaType.VIDEO) {
+            val videoList = remember(mediaList) { mediaList.filter { it.mediaType == MediaType.VIDEO } }
+            val startIndex = videoList.indexOfFirst { it.uniqueId == selectedMedia!!.uniqueId }.coerceAtLeast(0)
+            VideoPlayerScreen(
+                videoList = videoList.ifEmpty { listOf(selectedMedia!!) },
+                initialIndex = startIndex,
+                onBackClick = { selectedMedia = null },
+                onFavoriteClick = { id, isFav -> viewModel.toggleFavorite(id, isFav) },
+                onDeleteClick = { id -> viewModel.deleteMedia(id) }
+            )
+        } else {
+            MediaViewerScreen(
+                media = selectedMedia!!,
+                onBackClick = { selectedMedia = null },
+                onFavoriteClick = { id, isFav -> viewModel.toggleFavorite(id, isFav) },
+                onDeleteClick = { id -> viewModel.deleteMedia(id) }
+            )
+        }
         return
     }
 
@@ -137,6 +156,21 @@ fun MediaThumbnailItem(
                 modifier = Modifier.fillMaxSize()
             )
             if (media.mediaType == MediaType.VIDEO) {
+                Surface(
+                    shape = RoundedCornerShape(4.dp),
+                    color = Color.Black.copy(alpha = 0.7f),
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(4.dp)
+                ) {
+                    Text(
+                        text = formatDuration(media.duration),
+                        color = Color.White,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                    )
+                }
                 Icon(
                     imageVector = Icons.Default.PlayArrow,
                     contentDescription = "Video",

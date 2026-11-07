@@ -3,6 +3,7 @@ package com.secondproject.datasortgallery.feature.gallery
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.secondproject.datasortgallery.core.media.BulkOperationState
 import com.secondproject.datasortgallery.core.media.MediaActionType
 import com.secondproject.datasortgallery.core.media.MediaConsentRequest
 import com.secondproject.datasortgallery.core.media.MediaOperationResult
@@ -73,25 +74,174 @@ class GalleryViewModel @Inject constructor(
         }
     }
 
-    fun trashMedia(items: List<MediaEntity>) {
+    private val _bulkOperationState = MutableStateFlow<BulkOperationState?>(null)
+    val bulkOperationState: StateFlow<BulkOperationState?> = _bulkOperationState.asStateFlow()
+
+    private var bulkQueue: MutableList<MediaEntity> = mutableListOf()
+    private var bulkCurrentBatchItems: List<MediaEntity> = emptyList()
+    private var bulkBatchSize: Int = 500
+
+    private var queuedTrashItems: List<MediaEntity> = emptyList()
+    private var queuedTrashTarget: Boolean = true
+    private var queuedDeleteItems: List<MediaEntity> = emptyList()
+
+    fun startBulkTrash(items: List<MediaEntity>, batchSize: Int = 500) {
         if (items.isEmpty()) return
+        bulkBatchSize = batchSize
+        val total = items.size
+        val totalBytes = items.sumOf { it.size }
+        val batches = (total + batchSize - 1) / batchSize
+
+        bulkQueue = items.toMutableList()
+        _bulkOperationState.value = BulkOperationState(
+            operationType = MediaActionType.TRASH,
+            totalFiles = total,
+            totalBatches = batches,
+            totalBytesToRecover = totalBytes,
+            currentBatch = 1,
+            isRunning = true,
+            isCompleted = false,
+            isCancelled = false
+        )
+        processNextBulkBatch()
+    }
+
+    fun startBulkPermanentDelete(items: List<MediaEntity>, batchSize: Int = 500) {
+        if (items.isEmpty()) return
+        bulkBatchSize = batchSize
+        val total = items.size
+        val totalBytes = items.sumOf { it.size }
+        val batches = (total + batchSize - 1) / batchSize
+
+        bulkQueue = items.toMutableList()
+        _bulkOperationState.value = BulkOperationState(
+            operationType = MediaActionType.PERMANENT_DELETE,
+            totalFiles = total,
+            totalBatches = batches,
+            totalBytesToRecover = totalBytes,
+            currentBatch = 1,
+            isRunning = true,
+            isCompleted = false,
+            isCancelled = false
+        )
+        processNextBulkBatch()
+    }
+
+    private fun processNextBulkBatch() {
+        val currentState = _bulkOperationState.value ?: return
+        if (currentState.isCancelled) return
+
+        if (bulkQueue.isEmpty()) {
+            _bulkOperationState.value = currentState.copy(
+                isRunning = false,
+                isCompleted = true
+            )
+            refreshMedia()
+            return
+        }
+
         viewModelScope.launch {
             _isProcessing.value = true
             try {
-                when (val result = mediaStoreManager.prepareTrashRequest(items, true)) {
+                val batch = bulkQueue.take(bulkBatchSize)
+                bulkQueue = bulkQueue.drop(bulkBatchSize).toMutableList()
+                bulkCurrentBatchItems = batch
+
+                val result = when (currentState.operationType) {
+                    MediaActionType.TRASH -> mediaStoreManager.prepareTrashRequest(batch, true)
+                    MediaActionType.PERMANENT_DELETE -> mediaStoreManager.prepareDeleteRequest(batch)
+                    MediaActionType.RESTORE -> mediaStoreManager.prepareTrashRequest(batch, false)
+                }
+
+                when (result) {
                     is MediaOperationResult.RequiresConsent -> {
                         _pendingConsent.value = result.request
                     }
                     is MediaOperationResult.Completed -> {
-                        mediaRepository.toggleTrashBatch(result.targetUniqueIds, true)
-                        _operationFeedback.value = "Moved ${result.targetUniqueIds.size} item(s) to Recycle Bin"
+                        if (currentState.operationType == MediaActionType.PERMANENT_DELETE) {
+                            mediaRepository.deleteMultipleMediaChunked(result.targetUniqueIds)
+                        } else {
+                            mediaRepository.toggleTrashBatch(result.targetUniqueIds, currentState.operationType == MediaActionType.TRASH)
+                        }
+                        val newlyProcessed = result.targetUniqueIds.size
+                        val newlyRecovered = batch.filter { result.targetUniqueIds.contains(it.uniqueId) }.sumOf { it.size }
+                        val nextBatchNum = (currentState.currentBatch + 1).coerceAtMost(currentState.totalBatches)
+                        _bulkOperationState.value = currentState.copy(
+                            processedFiles = currentState.processedFiles + newlyProcessed,
+                            recoveredBytes = currentState.recoveredBytes + newlyRecovered,
+                            currentBatch = nextBatchNum
+                        )
+                        processNextBulkBatch()
                     }
                     is MediaOperationResult.Error -> {
-                        _operationFeedback.value = "Failed to move to trash: ${result.message}"
+                        val nextBatchNum = (currentState.currentBatch + 1).coerceAtMost(currentState.totalBatches)
+                        _bulkOperationState.value = currentState.copy(
+                            failedFiles = currentState.failedFiles + batch.size,
+                            currentBatch = nextBatchNum,
+                            errorMessage = result.message
+                        )
+                        processNextBulkBatch()
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error processing bulk batch", e)
+                _bulkOperationState.value = currentState.copy(
+                    failedFiles = currentState.failedFiles + bulkCurrentBatchItems.size,
+                    errorMessage = e.localizedMessage
+                )
+                processNextBulkBatch()
+            } finally {
+                _isProcessing.value = false
+            }
+        }
+    }
+
+    fun cancelBulkOperation() {
+        bulkQueue.clear()
+        _pendingConsent.value = null
+        _bulkOperationState.value = _bulkOperationState.value?.copy(
+            isRunning = false,
+            isCancelled = true,
+            errorMessage = "Operation cancelled by user"
+        )
+    }
+
+    fun dismissBulkOperation() {
+        _bulkOperationState.value = null
+    }
+
+    fun trashMedia(items: List<MediaEntity>, trash: Boolean = true) {
+        if (items.isEmpty()) return
+        viewModelScope.launch {
+            _isProcessing.value = true
+            try {
+                val batch = items.take(MediaStoreManager.MAX_BATCH_SIZE)
+                queuedTrashItems = items.drop(MediaStoreManager.MAX_BATCH_SIZE)
+                queuedTrashTarget = trash
+
+                when (val result = mediaStoreManager.prepareTrashRequest(batch, trash)) {
+                    is MediaOperationResult.RequiresConsent -> {
+                        _pendingConsent.value = result.request
+                    }
+                    is MediaOperationResult.Completed -> {
+                        mediaRepository.toggleTrashBatch(result.targetUniqueIds, trash)
+                        if (queuedTrashItems.isNotEmpty()) {
+                            val nextBatch = queuedTrashItems
+                            queuedTrashItems = emptyList()
+                            trashMedia(nextBatch, trash)
+                        } else {
+                            val actionDesc = if (trash) "Moved to Recycle Bin" else "Restored"
+                            _operationFeedback.value = "$actionDesc ${result.targetUniqueIds.size} item(s)"
+                        }
+                    }
+                    is MediaOperationResult.Error -> {
+                        queuedTrashItems = emptyList()
+                        _operationFeedback.value = "Failed: ${result.message}"
                     }
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error in trashMedia", e)
+                queuedTrashItems = emptyList()
                 _operationFeedback.value = "Error: ${e.localizedMessage}"
             } finally {
                 _isProcessing.value = false
@@ -104,20 +254,31 @@ class GalleryViewModel @Inject constructor(
         viewModelScope.launch {
             _isProcessing.value = true
             try {
-                when (val result = mediaStoreManager.prepareDeleteRequest(items)) {
+                val batch = items.take(MediaStoreManager.MAX_BATCH_SIZE)
+                queuedDeleteItems = items.drop(MediaStoreManager.MAX_BATCH_SIZE)
+
+                when (val result = mediaStoreManager.prepareDeleteRequest(batch)) {
                     is MediaOperationResult.RequiresConsent -> {
                         _pendingConsent.value = result.request
                     }
                     is MediaOperationResult.Completed -> {
                         mediaRepository.deleteMultipleMediaChunked(result.targetUniqueIds)
-                        _operationFeedback.value = "Permanently deleted ${result.targetUniqueIds.size} item(s)"
+                        if (queuedDeleteItems.isNotEmpty()) {
+                            val nextBatch = queuedDeleteItems
+                            queuedDeleteItems = emptyList()
+                            deletePermanently(nextBatch)
+                        } else {
+                            _operationFeedback.value = "Permanently deleted ${result.targetUniqueIds.size} item(s)"
+                        }
                     }
                     is MediaOperationResult.Error -> {
+                        queuedDeleteItems = emptyList()
                         _operationFeedback.value = "Failed to delete: ${result.message}"
                     }
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error in deletePermanently", e)
+                queuedDeleteItems = emptyList()
                 _operationFeedback.value = "Error: ${e.localizedMessage}"
             } finally {
                 _isProcessing.value = false
@@ -134,20 +295,47 @@ class GalleryViewModel @Inject constructor(
                 when (request.actionType) {
                     MediaActionType.TRASH -> {
                         mediaRepository.toggleTrashBatch(request.targetUniqueIds, true)
-                        _operationFeedback.value = "Moved ${request.targetUniqueIds.size} item(s) to Recycle Bin"
                     }
                     MediaActionType.RESTORE -> {
                         mediaRepository.toggleTrashBatch(request.targetUniqueIds, false)
-                        _operationFeedback.value = "Restored ${request.targetUniqueIds.size} item(s)"
                     }
                     MediaActionType.PERMANENT_DELETE -> {
                         mediaRepository.deleteMultipleMediaChunked(request.targetUniqueIds)
-                        _operationFeedback.value = "Permanently deleted ${request.targetUniqueIds.size} item(s)"
                     }
+                }
+
+                val bulkState = _bulkOperationState.value
+                if (bulkState != null && bulkState.isRunning) {
+                    val newlyProcessed = request.targetUniqueIds.size
+                    val newlyRecovered = bulkCurrentBatchItems.filter { request.targetUniqueIds.contains(it.uniqueId) }.sumOf { it.size }
+                    val nextBatchNum = (bulkState.currentBatch + 1).coerceAtMost(bulkState.totalBatches)
+                    _bulkOperationState.value = bulkState.copy(
+                        processedFiles = bulkState.processedFiles + newlyProcessed,
+                        recoveredBytes = bulkState.recoveredBytes + newlyRecovered,
+                        currentBatch = nextBatchNum
+                    )
+                    processNextBulkBatch()
+                } else if (queuedTrashItems.isNotEmpty()) {
+                    val nextBatch = queuedTrashItems
+                    queuedTrashItems = emptyList()
+                    _operationFeedback.value = "Moved ${request.targetUniqueIds.size} items. Processing next batch..."
+                    trashMedia(nextBatch, queuedTrashTarget)
+                } else if (queuedDeleteItems.isNotEmpty()) {
+                    val nextBatch = queuedDeleteItems
+                    queuedDeleteItems = emptyList()
+                    _operationFeedback.value = "Deleted ${request.targetUniqueIds.size} items. Processing next batch..."
+                    deletePermanently(nextBatch)
+                } else {
+                    val actionName = when (request.actionType) {
+                        MediaActionType.TRASH -> "Moved to Recycle Bin"
+                        MediaActionType.RESTORE -> "Restored"
+                        MediaActionType.PERMANENT_DELETE -> "Permanently deleted"
+                    }
+                    _operationFeedback.value = "$actionName ${request.targetUniqueIds.size} item(s)"
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error confirming consent action", e)
-                _operationFeedback.value = "Error finalizing deletion: ${e.localizedMessage}"
+                _operationFeedback.value = "Error finalizing action: ${e.localizedMessage}"
             } finally {
                 _isProcessing.value = false
             }
@@ -155,8 +343,21 @@ class GalleryViewModel @Inject constructor(
     }
 
     fun onConsentDenied() {
+        queuedTrashItems = emptyList()
+        queuedDeleteItems = emptyList()
         _pendingConsent.value = null
-        _operationFeedback.value = "Deletion cancelled"
+
+        val bulkState = _bulkOperationState.value
+        if (bulkState != null && bulkState.isRunning) {
+            bulkQueue.clear()
+            _bulkOperationState.value = bulkState.copy(
+                isRunning = false,
+                isCancelled = true,
+                errorMessage = "Consent was denied by user for batch ${bulkState.currentBatch}."
+            )
+        } else {
+            _operationFeedback.value = "Action cancelled"
+        }
     }
 
     fun clearFeedback() {

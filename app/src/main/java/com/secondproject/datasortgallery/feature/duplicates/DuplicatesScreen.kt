@@ -4,6 +4,7 @@ import android.app.Activity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -52,8 +53,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
+import com.secondproject.datasortgallery.core.designsystem.components.BulkOperationProgressDialog
 import com.secondproject.datasortgallery.data.local.entity.MediaEntity
+import com.secondproject.datasortgallery.data.local.entity.MediaType
 import com.secondproject.datasortgallery.feature.gallery.GalleryViewModel
+import com.secondproject.datasortgallery.feature.gallery.MediaViewerScreen
+import com.secondproject.datasortgallery.feature.videos.VideoPlayerScreen
 import java.util.Locale
 
 data class DuplicateGroup(
@@ -72,10 +77,12 @@ fun DuplicatesScreen(
     val pendingConsent by viewModel.pendingConsent.collectAsState()
     val feedback by viewModel.operationFeedback.collectAsState()
     val isProcessing by viewModel.isProcessing.collectAsState()
+    val bulkState by viewModel.bulkOperationState.collectAsState()
 
     val snackbarHostState = remember { SnackbarHostState() }
     var showCleanAllConfirmation by remember { mutableStateOf(false) }
     var itemToTrash by remember { mutableStateOf<MediaEntity?>(null) }
+    var previewMedia by remember { mutableStateOf<MediaEntity?>(null) }
 
     val consentLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartIntentSenderForResult()
@@ -138,23 +145,73 @@ fun DuplicatesScreen(
         }
     }
 
+    // Media Preview Overlay (Video Player or Image Viewer)
+    if (previewMedia != null) {
+        if (previewMedia!!.mediaType == MediaType.VIDEO) {
+            VideoPlayerScreen(
+                videoList = listOf(previewMedia!!),
+                initialIndex = 0,
+                onBackClick = { previewMedia = null },
+                onFavoriteClick = { id, isFav -> viewModel.toggleFavorite(id, isFav) },
+                onDeleteClick = { id -> viewModel.deleteMedia(id) }
+            )
+        } else {
+            MediaViewerScreen(
+                media = previewMedia!!,
+                onBackClick = { previewMedia = null },
+                onFavoriteClick = { id, isFav -> viewModel.toggleFavorite(id, isFav) },
+                onDeleteClick = { id -> viewModel.deleteMedia(id) }
+            )
+        }
+        return
+    }
+
+    // Bulk Operation Progress Dialog
+    bulkState?.let { state ->
+        BulkOperationProgressDialog(
+            state = state,
+            onCancel = { viewModel.cancelBulkOperation() },
+            onDismiss = { viewModel.dismissBulkOperation() }
+        )
+    }
+
     if (showCleanAllConfirmation) {
+        val totalBatches = (totalDuplicatesCount + 499) / 500
         AlertDialog(
             onDismissRequest = { showCleanAllConfirmation = false },
             icon = { Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
-            title = { Text("Delete Duplicate Files") },
+            title = { Text("Delete All Duplicate Files") },
             text = {
-                Text("Are you sure you want to clean $totalDuplicatesCount duplicate files ($totalRecoverableFormatted)? The original file in each group will be kept safe, and duplicate copies will be moved to the Recycle Bin.")
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Are you sure you want to clean all $totalDuplicatesCount duplicate files ($totalRecoverableFormatted)?",
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = "• Processed in $totalBatches batch(es) of up to 500 files each for maximum stability.\n" +
+                                "• Android system confirmation will appear for each batch.\n" +
+                                "• The recommended original in each duplicate group is kept safe.\n" +
+                                "• Duplicate copies will be moved to the Recycle Bin.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = "Warning: This action will move $totalDuplicatesCount files to trash.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             },
             confirmButton = {
                 Button(
                     onClick = {
                         showCleanAllConfirmation = false
                         val allDuplicatesToDelete = duplicateGroups.flatMap { it.items.drop(1) }
-                        viewModel.trashMedia(allDuplicatesToDelete)
+                        viewModel.startBulkTrash(allDuplicatesToDelete)
                     }
                 ) {
-                    Text("Delete Duplicate Files")
+                    Text("Delete All Duplicate Files")
                 }
             },
             dismissButton = {
@@ -304,7 +361,10 @@ fun DuplicatesScreen(
                                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                     group.items.forEachIndexed { index, media ->
                                         Row(
-                                            modifier = Modifier.fillMaxWidth(),
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clickable { previewMedia = media }
+                                                .padding(vertical = 4.dp),
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
                                             AsyncImage(

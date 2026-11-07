@@ -39,8 +39,10 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
 import com.secondproject.datasortgallery.data.local.entity.MediaEntity
+import com.secondproject.datasortgallery.data.local.entity.MediaType
 import com.secondproject.datasortgallery.feature.gallery.GalleryViewModel
 import com.secondproject.datasortgallery.feature.gallery.MediaViewerScreen
+import com.secondproject.datasortgallery.feature.videos.VideoPlayerScreen
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -79,12 +81,24 @@ fun SearchScreen(
     }
 
     if (selectedMedia != null) {
-        MediaViewerScreen(
-            media = selectedMedia!!,
-            onBackClick = { selectedMedia = null },
-            onFavoriteClick = { id, isFav -> viewModel.toggleFavorite(id, isFav) },
-            onDeleteClick = { id -> viewModel.deleteMedia(id) }
-        )
+        if (selectedMedia!!.mediaType == MediaType.VIDEO) {
+            val videoList = remember(filteredMedia) { filteredMedia.filter { it.mediaType == MediaType.VIDEO } }
+            val startIndex = videoList.indexOfFirst { it.uniqueId == selectedMedia!!.uniqueId }.coerceAtLeast(0)
+            VideoPlayerScreen(
+                videoList = videoList.ifEmpty { listOf(selectedMedia!!) },
+                initialIndex = startIndex,
+                onBackClick = { selectedMedia = null },
+                onFavoriteClick = { id, isFav -> viewModel.toggleFavorite(id, isFav) },
+                onDeleteClick = { id -> viewModel.deleteMedia(id) }
+            )
+        } else {
+            MediaViewerScreen(
+                media = selectedMedia!!,
+                onBackClick = { selectedMedia = null },
+                onFavoriteClick = { id, isFav -> viewModel.toggleFavorite(id, isFav) },
+                onDeleteClick = { id -> viewModel.deleteMedia(id) }
+            )
+        }
         return
     }
 

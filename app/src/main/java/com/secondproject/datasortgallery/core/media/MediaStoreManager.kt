@@ -43,6 +43,7 @@ class MediaStoreManager @Inject constructor(
 ) {
     companion object {
         private const val TAG = "MediaStoreManager"
+        const val MAX_BATCH_SIZE = 500
     }
 
     suspend fun prepareTrashRequest(
@@ -55,7 +56,9 @@ class MediaStoreManager @Inject constructor(
         }
 
         try {
-            val (existingItems, missingUniqueIds) = verifyAndFilterExistingMedia(items)
+            // Cap at MAX_BATCH_SIZE (500) to strictly stay below Android's 2000 URI limit and prevent Binder overflow
+            val batch = items.take(MAX_BATCH_SIZE)
+            val (existingItems, missingUniqueIds) = verifyAndFilterExistingMedia(batch)
             if (missingUniqueIds.isNotEmpty()) {
                 Log.d(TAG, "Cleaning up ${missingUniqueIds.size} already deleted items from database")
                 mediaDao.deleteMediaByIdsChunked(missingUniqueIds)
@@ -101,7 +104,9 @@ class MediaStoreManager @Inject constructor(
         }
 
         try {
-            val (existingItems, missingUniqueIds) = verifyAndFilterExistingMedia(items)
+            // Cap at MAX_BATCH_SIZE (500) to strictly stay below Android's 2000 URI limit and prevent Binder overflow
+            val batch = items.take(MAX_BATCH_SIZE)
+            val (existingItems, missingUniqueIds) = verifyAndFilterExistingMedia(batch)
             if (missingUniqueIds.isNotEmpty()) {
                 Log.d(TAG, "Cleaning up ${missingUniqueIds.size} already deleted items from database")
                 mediaDao.deleteMediaByIdsChunked(missingUniqueIds)

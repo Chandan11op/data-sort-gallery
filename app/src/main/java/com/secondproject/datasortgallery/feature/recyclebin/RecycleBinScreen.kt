@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -61,6 +62,8 @@ import com.secondproject.datasortgallery.core.media.MediaOperationResult
 import com.secondproject.datasortgallery.core.media.MediaStoreManager
 import com.secondproject.datasortgallery.data.local.entity.MediaEntity
 import com.secondproject.datasortgallery.data.repository.MediaRepository
+import com.secondproject.datasortgallery.feature.gallery.MediaViewerScreen
+import com.secondproject.datasortgallery.feature.videos.VideoPlayerScreen
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -101,25 +104,38 @@ class RecycleBinViewModel @Inject constructor(
     private val _isProcessing = MutableStateFlow(false)
     val isProcessing: StateFlow<Boolean> = _isProcessing.asStateFlow()
 
+    private var queuedRestoreItems: List<MediaEntity> = emptyList()
+    private var queuedDeleteItems: List<MediaEntity> = emptyList()
+
     fun restoreMediaItems(items: List<MediaEntity>) {
         if (items.isEmpty()) return
         viewModelScope.launch {
             _isProcessing.value = true
             try {
-                when (val result = mediaStoreManager.prepareTrashRequest(items, false)) {
+                val batch = items.take(MediaStoreManager.MAX_BATCH_SIZE)
+                queuedRestoreItems = items.drop(MediaStoreManager.MAX_BATCH_SIZE)
+                when (val result = mediaStoreManager.prepareTrashRequest(batch, false)) {
                     is MediaOperationResult.RequiresConsent -> {
                         _pendingConsent.value = result.request
                     }
                     is MediaOperationResult.Completed -> {
                         mediaRepository.toggleTrashBatch(result.targetUniqueIds, false)
-                        _operationFeedback.value = "Restored ${result.targetUniqueIds.size} item(s)"
+                        if (queuedRestoreItems.isNotEmpty()) {
+                            val next = queuedRestoreItems
+                            queuedRestoreItems = emptyList()
+                            restoreMediaItems(next)
+                        } else {
+                            _operationFeedback.value = "Restored ${result.targetUniqueIds.size} item(s)"
+                        }
                     }
                     is MediaOperationResult.Error -> {
+                        queuedRestoreItems = emptyList()
                         _operationFeedback.value = "Failed to restore: ${result.message}"
                     }
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error restoring media", e)
+                queuedRestoreItems = emptyList()
                 _operationFeedback.value = "Error: ${e.localizedMessage}"
             } finally {
                 _isProcessing.value = false
@@ -132,20 +148,30 @@ class RecycleBinViewModel @Inject constructor(
         viewModelScope.launch {
             _isProcessing.value = true
             try {
-                when (val result = mediaStoreManager.prepareDeleteRequest(items)) {
+                val batch = items.take(MediaStoreManager.MAX_BATCH_SIZE)
+                queuedDeleteItems = items.drop(MediaStoreManager.MAX_BATCH_SIZE)
+                when (val result = mediaStoreManager.prepareDeleteRequest(batch)) {
                     is MediaOperationResult.RequiresConsent -> {
                         _pendingConsent.value = result.request
                     }
                     is MediaOperationResult.Completed -> {
                         mediaRepository.deleteMultipleMediaChunked(result.targetUniqueIds)
-                        _operationFeedback.value = "Permanently deleted ${result.targetUniqueIds.size} item(s)"
+                        if (queuedDeleteItems.isNotEmpty()) {
+                            val next = queuedDeleteItems
+                            queuedDeleteItems = emptyList()
+                            permanentDeleteItems(next)
+                        } else {
+                            _operationFeedback.value = "Permanently deleted ${result.targetUniqueIds.size} item(s)"
+                        }
                     }
                     is MediaOperationResult.Error -> {
+                        queuedDeleteItems = emptyList()
                         _operationFeedback.value = "Failed to delete: ${result.message}"
                     }
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error deleting media permanently", e)
+                queuedDeleteItems = emptyList()
                 _operationFeedback.value = "Error: ${e.localizedMessage}"
             } finally {
                 _isProcessing.value = false
@@ -162,11 +188,25 @@ class RecycleBinViewModel @Inject constructor(
                 when (request.actionType) {
                     MediaActionType.RESTORE -> {
                         mediaRepository.toggleTrashBatch(request.targetUniqueIds, false)
-                        _operationFeedback.value = "Restored ${request.targetUniqueIds.size} item(s)"
+                        if (queuedRestoreItems.isNotEmpty()) {
+                            val next = queuedRestoreItems
+                            queuedRestoreItems = emptyList()
+                            _operationFeedback.value = "Restored ${request.targetUniqueIds.size} items. Processing next batch..."
+                            restoreMediaItems(next)
+                        } else {
+                            _operationFeedback.value = "Restored ${request.targetUniqueIds.size} item(s)"
+                        }
                     }
                     MediaActionType.PERMANENT_DELETE -> {
                         mediaRepository.deleteMultipleMediaChunked(request.targetUniqueIds)
-                        _operationFeedback.value = "Permanently deleted ${request.targetUniqueIds.size} item(s)"
+                        if (queuedDeleteItems.isNotEmpty()) {
+                            val next = queuedDeleteItems
+                            queuedDeleteItems = emptyList()
+                            _operationFeedback.value = "Deleted ${request.targetUniqueIds.size} items. Processing next batch..."
+                            permanentDeleteItems(next)
+                        } else {
+                            _operationFeedback.value = "Permanently deleted ${request.targetUniqueIds.size} item(s)"
+                        }
                     }
                     else -> {}
                 }
@@ -180,6 +220,8 @@ class RecycleBinViewModel @Inject constructor(
     }
 
     fun onConsentDenied() {
+        queuedRestoreItems = emptyList()
+        queuedDeleteItems = emptyList()
         _pendingConsent.value = null
         _operationFeedback.value = "Operation cancelled"
     }
@@ -226,6 +268,7 @@ fun RecycleBinScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     var showEmptyTrashDialog by remember { mutableStateOf(false) }
     var itemToDeletePermanently by remember { mutableStateOf<MediaEntity?>(null) }
+    var previewMedia by remember { mutableStateOf<MediaEntity?>(null) }
 
     val consentLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartIntentSenderForResult()
@@ -252,6 +295,24 @@ fun RecycleBinScreen(
             snackbarHostState.showSnackbar(msg)
             viewModel.clearFeedback()
         }
+    }
+
+    if (previewMedia != null) {
+        if (previewMedia!!.mediaType == com.secondproject.datasortgallery.data.local.entity.MediaType.VIDEO) {
+            VideoPlayerScreen(
+                videoList = listOf(previewMedia!!),
+                initialIndex = 0,
+                onBackClick = { previewMedia = null }
+            )
+        } else {
+            MediaViewerScreen(
+                media = previewMedia!!,
+                onBackClick = { previewMedia = null },
+                onFavoriteClick = { _, _ -> },
+                onDeleteClick = { id -> viewModel.permanentDelete(id) }
+            )
+        }
+        return
     }
 
     if (showEmptyTrashDialog) {
@@ -378,6 +439,7 @@ fun RecycleBinScreen(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .aspectRatio(1f)
+                                    .clickable { previewMedia = media }
                             )
                             Row(
                                 modifier = Modifier
