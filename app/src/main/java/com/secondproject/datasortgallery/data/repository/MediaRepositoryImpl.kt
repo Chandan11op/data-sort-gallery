@@ -45,12 +45,30 @@ class MediaRepositoryImpl @Inject constructor(
         mediaDao.updateTrashed(uniqueId, isTrashed)
     }
 
+    override suspend fun toggleTrashBatch(uniqueIds: List<String>, isTrashed: Boolean) = withContext(ioDispatcher) {
+        if (uniqueIds.isNotEmpty()) {
+            mediaDao.updateTrashedChunked(uniqueIds, isTrashed)
+        }
+    }
+
     override suspend fun deleteMedia(uniqueId: String) = withContext(ioDispatcher) {
         mediaDao.deleteMediaById(uniqueId)
     }
 
     override suspend fun deleteMultipleMedia(uniqueIds: List<String>) = withContext(ioDispatcher) {
-        mediaDao.deleteMediaByIds(uniqueIds)
+        if (uniqueIds.isNotEmpty()) {
+            mediaDao.deleteMediaByIdsChunked(uniqueIds)
+        }
+    }
+
+    override suspend fun deleteMultipleMediaChunked(uniqueIds: List<String>) = withContext(ioDispatcher) {
+        if (uniqueIds.isNotEmpty()) {
+            mediaDao.deleteMediaByIdsChunked(uniqueIds)
+        }
+    }
+
+    override suspend fun getMediaByIds(uniqueIds: List<String>): List<MediaEntity> = withContext(ioDispatcher) {
+        if (uniqueIds.isEmpty()) emptyList() else mediaDao.getMediaByIds(uniqueIds)
     }
 
     override fun searchMedia(query: String): Flow<List<MediaEntity>> = mediaDao.searchMedia(query)

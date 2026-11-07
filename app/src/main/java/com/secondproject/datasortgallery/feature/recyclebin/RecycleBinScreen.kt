@@ -1,5 +1,10 @@
 package com.secondproject.datasortgallery.feature.recyclebin
 
+import android.app.Activity
+import android.util.Log
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,17 +25,27 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Restore
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
@@ -40,36 +55,158 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import coil.compose.AsyncImage
+import com.secondproject.datasortgallery.core.media.MediaActionType
+import com.secondproject.datasortgallery.core.media.MediaConsentRequest
+import com.secondproject.datasortgallery.core.media.MediaOperationResult
+import com.secondproject.datasortgallery.core.media.MediaStoreManager
 import com.secondproject.datasortgallery.data.local.entity.MediaEntity
 import com.secondproject.datasortgallery.data.repository.MediaRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 @HiltViewModel
 class RecycleBinViewModel @Inject constructor(
-    private val mediaRepository: MediaRepository
+    private val mediaRepository: MediaRepository,
+    private val mediaStoreManager: MediaStoreManager
 ) : ViewModel() {
 
+    companion object {
+        private const val TAG = "RecycleBinVM"
+    }
+
     val trashedMedia: StateFlow<List<MediaEntity>> = mediaRepository.getTrashedMedia()
+        .catch { e ->
+            Log.e(TAG, "Error collecting trashed media", e)
+            emit(emptyList())
+        }
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
             initialValue = emptyList()
         )
 
+    private val _pendingConsent = MutableStateFlow<MediaConsentRequest?>(null)
+    val pendingConsent: StateFlow<MediaConsentRequest?> = _pendingConsent.asStateFlow()
+
+    private val _operationFeedback = MutableStateFlow<String?>(null)
+    val operationFeedback: StateFlow<String?> = _operationFeedback.asStateFlow()
+
+    private val _isProcessing = MutableStateFlow(false)
+    val isProcessing: StateFlow<Boolean> = _isProcessing.asStateFlow()
+
+    fun restoreMediaItems(items: List<MediaEntity>) {
+        if (items.isEmpty()) return
+        viewModelScope.launch {
+            _isProcessing.value = true
+            try {
+                when (val result = mediaStoreManager.prepareTrashRequest(items, false)) {
+                    is MediaOperationResult.RequiresConsent -> {
+                        _pendingConsent.value = result.request
+                    }
+                    is MediaOperationResult.Completed -> {
+                        mediaRepository.toggleTrashBatch(result.targetUniqueIds, false)
+                        _operationFeedback.value = "Restored ${result.targetUniqueIds.size} item(s)"
+                    }
+                    is MediaOperationResult.Error -> {
+                        _operationFeedback.value = "Failed to restore: ${result.message}"
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error restoring media", e)
+                _operationFeedback.value = "Error: ${e.localizedMessage}"
+            } finally {
+                _isProcessing.value = false
+            }
+        }
+    }
+
+    fun permanentDeleteItems(items: List<MediaEntity>) {
+        if (items.isEmpty()) return
+        viewModelScope.launch {
+            _isProcessing.value = true
+            try {
+                when (val result = mediaStoreManager.prepareDeleteRequest(items)) {
+                    is MediaOperationResult.RequiresConsent -> {
+                        _pendingConsent.value = result.request
+                    }
+                    is MediaOperationResult.Completed -> {
+                        mediaRepository.deleteMultipleMediaChunked(result.targetUniqueIds)
+                        _operationFeedback.value = "Permanently deleted ${result.targetUniqueIds.size} item(s)"
+                    }
+                    is MediaOperationResult.Error -> {
+                        _operationFeedback.value = "Failed to delete: ${result.message}"
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error deleting media permanently", e)
+                _operationFeedback.value = "Error: ${e.localizedMessage}"
+            } finally {
+                _isProcessing.value = false
+            }
+        }
+    }
+
+    fun onConsentApproved() {
+        val request = _pendingConsent.value ?: return
+        _pendingConsent.value = null
+        viewModelScope.launch {
+            _isProcessing.value = true
+            try {
+                when (request.actionType) {
+                    MediaActionType.RESTORE -> {
+                        mediaRepository.toggleTrashBatch(request.targetUniqueIds, false)
+                        _operationFeedback.value = "Restored ${request.targetUniqueIds.size} item(s)"
+                    }
+                    MediaActionType.PERMANENT_DELETE -> {
+                        mediaRepository.deleteMultipleMediaChunked(request.targetUniqueIds)
+                        _operationFeedback.value = "Permanently deleted ${request.targetUniqueIds.size} item(s)"
+                    }
+                    else -> {}
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error executing confirmed action", e)
+                _operationFeedback.value = "Error: ${e.localizedMessage}"
+            } finally {
+                _isProcessing.value = false
+            }
+        }
+    }
+
+    fun onConsentDenied() {
+        _pendingConsent.value = null
+        _operationFeedback.value = "Operation cancelled"
+    }
+
+    fun clearFeedback() {
+        _operationFeedback.value = null
+    }
+
     fun restoreMedia(uniqueId: String) {
         viewModelScope.launch {
-            mediaRepository.toggleTrash(uniqueId, false)
+            val item = mediaRepository.getMediaById(uniqueId)
+            if (item != null) {
+                restoreMediaItems(listOf(item))
+            } else {
+                mediaRepository.toggleTrash(uniqueId, false)
+            }
         }
     }
 
     fun permanentDelete(uniqueId: String) {
         viewModelScope.launch {
-            mediaRepository.deleteMedia(uniqueId)
+            val item = mediaRepository.getMediaById(uniqueId)
+            if (item != null) {
+                permanentDeleteItems(listOf(item))
+            } else {
+                mediaRepository.deleteMedia(uniqueId)
+            }
         }
     }
 }
@@ -82,6 +219,91 @@ fun RecycleBinScreen(
     viewModel: RecycleBinViewModel = hiltViewModel()
 ) {
     val trashedList by viewModel.trashedMedia.collectAsState()
+    val pendingConsent by viewModel.pendingConsent.collectAsState()
+    val feedback by viewModel.operationFeedback.collectAsState()
+    val isProcessing by viewModel.isProcessing.collectAsState()
+
+    val snackbarHostState = remember { SnackbarHostState() }
+    var showEmptyTrashDialog by remember { mutableStateOf(false) }
+    var itemToDeletePermanently by remember { mutableStateOf<MediaEntity?>(null) }
+
+    val consentLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            viewModel.onConsentApproved()
+        } else {
+            viewModel.onConsentDenied()
+        }
+    }
+
+    LaunchedEffect(pendingConsent) {
+        pendingConsent?.let { request ->
+            try {
+                consentLauncher.launch(IntentSenderRequest.Builder(request.intentSender).build())
+            } catch (e: Exception) {
+                viewModel.onConsentDenied()
+            }
+        }
+    }
+
+    LaunchedEffect(feedback) {
+        feedback?.let { msg ->
+            snackbarHostState.showSnackbar(msg)
+            viewModel.clearFeedback()
+        }
+    }
+
+    if (showEmptyTrashDialog) {
+        AlertDialog(
+            onDismissRequest = { showEmptyTrashDialog = false },
+            icon = { Icon(Icons.Default.DeleteSweep, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
+            title = { Text("Empty Recycle Bin") },
+            text = { Text("Permanently delete all ${trashedList.size} items? This action cannot be undone.") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showEmptyTrashDialog = false
+                        viewModel.permanentDeleteItems(trashedList)
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("Empty Trash")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showEmptyTrashDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    if (itemToDeletePermanently != null) {
+        AlertDialog(
+            onDismissRequest = { itemToDeletePermanently = null },
+            icon = { Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
+            title = { Text("Permanently Delete") },
+            text = { Text("Permanently delete \"${itemToDeletePermanently?.filename}\"? This action cannot be undone.") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val item = itemToDeletePermanently!!
+                        itemToDeletePermanently = null
+                        viewModel.permanentDeleteItems(listOf(item))
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("Delete")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { itemToDeletePermanently = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -91,9 +313,20 @@ fun RecycleBinScreen(
                     IconButton(onClick = onBackClick) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
+                },
+                actions = {
+                    if (trashedList.isNotEmpty()) {
+                        IconButton(
+                            onClick = { showEmptyTrashDialog = true },
+                            enabled = !isProcessing
+                        ) {
+                            Icon(Icons.Default.DeleteSweep, contentDescription = "Empty Recycle Bin")
+                        }
+                    }
                 }
             )
         },
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         modifier = modifier
     ) { innerPadding ->
         if (trashedList.isEmpty()) {
@@ -153,11 +386,25 @@ fun RecycleBinScreen(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                IconButton(onClick = { viewModel.restoreMedia(media.uniqueId) }) {
-                                    Icon(Icons.Default.Restore, contentDescription = "Restore", tint = MaterialTheme.colorScheme.primary)
+                                IconButton(
+                                    onClick = { viewModel.restoreMediaItems(listOf(media)) },
+                                    enabled = !isProcessing
+                                ) {
+                                    Icon(
+                                        Icons.Default.Restore,
+                                        contentDescription = "Restore",
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
                                 }
-                                IconButton(onClick = { viewModel.permanentDelete(media.uniqueId) }) {
-                                    Icon(Icons.Default.Delete, contentDescription = "Delete", tint = MaterialTheme.colorScheme.error)
+                                IconButton(
+                                    onClick = { itemToDeletePermanently = media },
+                                    enabled = !isProcessing
+                                ) {
+                                    Icon(
+                                        Icons.Default.Delete,
+                                        contentDescription = "Delete",
+                                        tint = MaterialTheme.colorScheme.error
+                                    )
                                 }
                             }
                         }

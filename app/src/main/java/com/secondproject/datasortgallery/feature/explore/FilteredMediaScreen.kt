@@ -1,5 +1,9 @@
 package com.secondproject.datasortgallery.feature.explore
 
+import android.app.Activity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -17,6 +21,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -41,8 +46,29 @@ fun FilteredMediaScreen(
     viewModel: GalleryViewModel = hiltViewModel()
 ) {
     val mediaList by viewModel.mediaList.collectAsState()
+    val pendingConsent by viewModel.pendingConsent.collectAsState()
     val filtered = remember(mediaList, filterPredicate) { mediaList.filter(filterPredicate) }
     var selectedMedia by remember { mutableStateOf<MediaEntity?>(null) }
+
+    val consentLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            viewModel.onConsentApproved()
+        } else {
+            viewModel.onConsentDenied()
+        }
+    }
+
+    LaunchedEffect(pendingConsent) {
+        pendingConsent?.let { request ->
+            try {
+                consentLauncher.launch(IntentSenderRequest.Builder(request.intentSender).build())
+            } catch (e: Exception) {
+                viewModel.onConsentDenied()
+            }
+        }
+    }
 
     if (selectedMedia != null) {
         MediaViewerScreen(

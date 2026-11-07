@@ -13,7 +13,10 @@ interface MediaRepository {
     suspend fun scanAndSyncMedia()
     suspend fun toggleFavorite(uniqueId: String, isFavorite: Boolean)
     suspend fun toggleTrash(uniqueId: String, isTrashed: Boolean)
+    suspend fun toggleTrashBatch(uniqueIds: List<String>, isTrashed: Boolean)
     suspend fun deleteMedia(uniqueId: String)
     suspend fun deleteMultipleMedia(uniqueIds: List<String>)
+    suspend fun deleteMultipleMediaChunked(uniqueIds: List<String>)
+    suspend fun getMediaByIds(uniqueIds: List<String>): List<MediaEntity>
     fun searchMedia(query: String): Flow<List<MediaEntity>>
 }
